@@ -7,5 +7,5 @@
 window.PORTAL_CONFIG = {
   // URL del Cloudflare Worker que mantiene la API key oculta.
   // Ejemplo: 'https://electoral-proxy-rionegro.tu-cuenta.workers.dev'
-  PROXY_URL: 'https://YOUR-WORKER.workers.dev',
+  PROXY_URL: 'https://electoral-proxy-rionegro.alexor87.workers.dev',
 };
