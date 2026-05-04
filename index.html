@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1280" />
+  <title>Portal de Consulta Electoral · Rionegro</title>
+  <meta name="description" content="Consulta de resultados electorales de Rionegro, Antioquia. Alcaldía y Concejo Municipal." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="css/styles.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+</head>
+<body>
+  <!-- Setup screen: shown when no API key is configured -->
+  <section id="setup-screen" class="setup-screen" hidden>
+    <div class="setup-card">
+      <div class="setup-header">
+        <div class="badge badge--green">Rionegro · Antioquia</div>
+        <h1>Portal de Consulta Electoral</h1>
+        <p class="setup-sub">Conecta con la API electoral para explorar los resultados históricos de Alcaldía y Concejo Municipal.</p>
+      </div>
+
+      <form id="setup-form" class="setup-form" autocomplete="off">
+        <label class="field">
+          <span class="field__label">API key de scrutix.co</span>
+          <input
+            type="password"
+            id="api-key-input"
+            name="apiKey"
+            placeholder="sk_electoral_..."
+            required
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span class="field__hint">La key se guarda solo en esta sesión. Se borra al cerrar la pestaña.</span>
+        </label>
+
+        <div class="setup-actions">
+          <button type="submit" class="btn btn--primary" id="connect-btn">
+            <span class="btn__label">Conectar</span>
+            <span class="btn__spinner" hidden></span>
+          </button>
+          <a class="link" href="https://app.scrutix.co" target="_blank" rel="noopener">¿No tienes una key? Solicítala aquí</a>
+        </div>
+
+        <div id="setup-error" class="alert alert--error" hidden></div>
+      </form>
+
+      <footer class="setup-foot">
+        <span>v1.0 · Datos de la Registraduría Nacional del Estado Civil</span>
+      </footer>
+    </div>
+  </section>
+
+  <!-- Main application -->
+  <main id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="topbar__brand">
+        <div class="topbar__logo" aria-hidden="true">RN</div>
+        <div class="topbar__title">
+          <span class="topbar__title-main">Portal Electoral · Rionegro</span>
+          <span class="topbar__title-sub">Datos oficiales · Registraduría Nacional</span>
+        </div>
+      </div>
+
+      <div class="topbar__filters">
+        <label class="select">
+          <span class="select__label">Elección</span>
+          <select id="election-select" disabled></select>
+        </label>
+        <label class="select">
+          <span class="select__label">Cargo</span>
+          <select id="corporation-select" disabled></select>
+        </label>
+      </div>
+
+      <div class="topbar__actions">
+        <button id="ai-global-btn" class="btn btn--ai" type="button" disabled>
+          <svg class="btn__icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M8 1.5l1.7 4.3 4.3 1.7-4.3 1.7L8 13.5l-1.7-4.3L2 7.5l4.3-1.7z"/>
+          </svg>
+          <span>Analizar con IA</span>
+        </button>
+        <button id="settings-btn" class="btn btn--ghost" type="button" title="Configuración">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <path fill="currentColor" d="M8 5a3 3 0 100 6 3 3 0 000-6zm6.5 4l1.4 1-1.5 2.6-1.7-.4a6 6 0 01-1.4.8l-.3 1.7H7l-.3-1.7a6 6 0 01-1.4-.8l-1.7.4L2 9.9 3.4 9c-.05-.3-.07-.6-.07-1s.02-.7.07-1L2 6.1l1.5-2.6 1.7.4a6 6 0 011.4-.8L7 1.4h2l.3 1.7a6 6 0 011.4.8l1.7-.4L13.9 6.1 12.5 7c.05.3.07.6.07 1s-.02.7-.07 1l1.4 1z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab tab--active" data-view="summary" role="tab" aria-selected="true">
+        <span class="tab__num">01</span> Resumen general
+      </button>
+      <button class="tab" data-view="candidates" role="tab" aria-selected="false">
+        <span class="tab__num">02</span> Candidatos
+      </button>
+      <button class="tab" data-view="parties" role="tab" aria-selected="false">
+        <span class="tab__num">03</span> Partidos
+      </button>
+      <button class="tab" data-view="stations" role="tab" aria-selected="false">
+        <span class="tab__num">04</span> Puestos de votación
+      </button>
+    </nav>
+
+    <section id="content" class="content">
+      <!-- Loading state -->
+      <div id="content-loading" class="loading" hidden>
+        <div class="loading__bar"></div>
+        <span class="loading__text">Cargando datos electorales...</span>
+      </div>
+
+      <!-- Error state -->
+      <div id="content-error" class="alert alert--error alert--block" hidden></div>
+
+      <!-- View: Summary -->
+      <article id="view-summary" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Resumen general</h2>
+            <p class="view__sub" id="summary-context">—</p>
+          </div>
+        </header>
+
+        <div class="metrics">
+          <div class="metric">
+            <span class="metric__label">Votos válidos</span>
+            <span class="metric__value" id="m-total-votes">—</span>
+            <span class="metric__hint" id="m-total-votes-hint">&nbsp;</span>
+          </div>
+          <div class="metric">
+            <span class="metric__label">Candidatos</span>
+            <span class="metric__value" id="m-candidates">—</span>
+            <span class="metric__hint">en el ranking</span>
+          </div>
+          <div class="metric">
+            <span class="metric__label">Partidos</span>
+            <span class="metric__value" id="m-parties">—</span>
+            <span class="metric__hint">con votación</span>
+          </div>
+          <div class="metric">
+            <span class="metric__label">Puestos</span>
+            <span class="metric__value" id="m-stations">—</span>
+            <span class="metric__hint">de votación</span>
+          </div>
+        </div>
+
+        <div class="winner-card" id="winner-card" hidden>
+          <div class="winner-card__tag">Más votado</div>
+          <div class="winner-card__name" id="winner-name">—</div>
+          <div class="winner-card__party" id="winner-party">—</div>
+          <div class="winner-card__stats">
+            <div>
+              <span class="winner-card__num" id="winner-votes">—</span>
+              <span class="winner-card__sub">votos</span>
+            </div>
+            <div>
+              <span class="winner-card__num" id="winner-pct">—</span>
+              <span class="winner-card__sub">del total</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid--2">
+          <section class="panel">
+            <header class="panel__head">
+              <h3 class="panel__title">Top 5 candidatos</h3>
+              <span class="panel__hint">Por votos</span>
+            </header>
+            <div class="bar-list" id="top-candidates"></div>
+          </section>
+          <section class="panel">
+            <header class="panel__head">
+              <h3 class="panel__title">Top 5 partidos</h3>
+              <span class="panel__hint">Por votos</span>
+            </header>
+            <div class="bar-list" id="top-parties"></div>
+          </section>
+        </div>
+      </article>
+
+      <!-- View: Candidates -->
+      <article id="view-candidates" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Candidatos</h2>
+            <p class="view__sub">Ranking completo del cargo seleccionado.</p>
+          </div>
+          <div class="view__filters">
+            <label class="select">
+              <span class="select__label">Filtrar por partido</span>
+              <select id="party-filter">
+                <option value="">Todos los partidos</option>
+              </select>
+            </label>
+          </div>
+        </header>
+        <div class="candidate-list" id="candidate-list"></div>
+      </article>
+
+      <!-- View: Parties -->
+      <article id="view-parties" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Partidos</h2>
+            <p class="view__sub">Distribución del voto por colectividad política.</p>
+          </div>
+        </header>
+        <div class="party-grid" id="party-grid"></div>
+      </article>
+
+      <!-- View: Stations -->
+      <article id="view-stations" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Puestos de votación</h2>
+            <p class="view__sub">Resultados por puesto. Haz clic en cualquier puesto para ver detalle.</p>
+          </div>
+          <div class="view__filters">
+            <label class="select">
+              <span class="select__label">Buscar</span>
+              <input type="search" id="station-search" placeholder="Nombre o zona..." />
+            </label>
+          </div>
+        </header>
+        <div class="station-grid" id="station-grid"></div>
+      </article>
+    </section>
+  </main>
+
+  <!-- Station detail modal -->
+  <div id="station-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="station-modal-title">
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel modal__panel--wide">
+      <header class="modal__head">
+        <div>
+          <span class="badge badge--blue" id="station-modal-zone">—</span>
+          <h2 class="modal__title" id="station-modal-title">—</h2>
+          <p class="modal__sub" id="station-modal-address">—</p>
+        </div>
+        <button class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+      </header>
+
+      <div class="modal__body" id="station-modal-body">
+        <div class="loading"><div class="loading__bar"></div><span class="loading__text">Cargando puesto...</span></div>
+      </div>
+
+      <footer class="modal__foot">
+        <button id="station-ai-btn" class="btn btn--ai" type="button">
+          <svg class="btn__icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M8 1.5l1.7 4.3 4.3 1.7-4.3 1.7L8 13.5l-1.7-4.3L2 7.5l4.3-1.7z"/>
+          </svg>
+          <span>Analizar este puesto con IA</span>
+        </button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- AI analysis modal (chat) -->
+  <div id="ai-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="ai-modal-title">
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel modal__panel--ai">
+      <header class="modal__head">
+        <div>
+          <span class="badge badge--green">IA · Análisis estratégico</span>
+          <h2 class="modal__title" id="ai-modal-title">Análisis con IA</h2>
+          <p class="modal__sub" id="ai-modal-sub">—</p>
+        </div>
+        <button class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+      </header>
+
+      <div class="modal__body" id="ai-modal-body">
+        <div id="ai-config" class="ai-config" hidden>
+          <p class="ai-config__lead">Configura un proveedor de IA para generar análisis dentro del portal.</p>
+          <div class="ai-config__providers">
+            <label class="radio">
+              <input type="radio" name="ai-provider" value="anthropic" checked />
+              <span>Anthropic (Claude)</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="ai-provider" value="openai" />
+              <span>OpenAI (GPT)</span>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field__label">API key del proveedor</span>
+            <input type="password" id="ai-key-input" placeholder="sk-..." spellcheck="false" autocomplete="off" />
+            <span class="field__hint">Se guarda solo en esta sesión. Nunca se persiste.</span>
+          </label>
+          <div class="ai-config__actions">
+            <button class="btn btn--primary" id="ai-config-save" type="button">Guardar y analizar</button>
+            <button class="btn btn--ghost" id="ai-config-skip" type="button">Solo ver contexto</button>
+          </div>
+        </div>
+
+        <div id="ai-chat" class="ai-chat" hidden>
+          <div id="ai-messages" class="ai-messages"></div>
+          <div class="ai-input">
+            <textarea id="ai-prompt" placeholder="Escribe una pregunta de seguimiento..." rows="2"></textarea>
+            <button class="btn btn--primary" id="ai-send-btn" type="button">Enviar</button>
+          </div>
+        </div>
+
+        <details id="ai-context-details" class="ai-context" hidden>
+          <summary>Ver contexto enviado a la IA</summary>
+          <pre id="ai-context-pre"></pre>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true">
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel">
+      <header class="modal__head">
+        <h2 class="modal__title">Configuración</h2>
+        <button class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+      </header>
+      <div class="modal__body">
+        <div class="settings-row">
+          <div>
+            <strong>API key electoral</strong>
+            <p class="muted">Conexión a scrutix.co · activa para esta sesión.</p>
+          </div>
+          <button class="btn btn--ghost" id="logout-btn" type="button">Cambiar key</button>
+        </div>
+        <div class="settings-row">
+          <div>
+            <strong>API key de IA</strong>
+            <p class="muted" id="ai-status-text">No configurada.</p>
+          </div>
+          <button class="btn btn--ghost" id="ai-clear-btn" type="button">Borrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
