@@ -12,6 +12,7 @@
 
   <link rel="stylesheet" href="css/styles.css" />
 
+  <script src="js/config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -21,30 +22,30 @@
       <div class="setup-header">
         <div class="badge badge--green">Rionegro · Antioquia</div>
         <h1>Portal de Consulta Electoral</h1>
-        <p class="setup-sub">Conecta con la API electoral para explorar los resultados históricos de Alcaldía y Concejo Municipal.</p>
+        <p class="setup-sub">Ingresa la contraseña de acceso para explorar los resultados históricos de Alcaldía y Concejo Municipal.</p>
       </div>
 
       <form id="setup-form" class="setup-form" autocomplete="off">
         <label class="field">
-          <span class="field__label">API key de scrutix.co</span>
+          <span class="field__label">Contraseña de acceso</span>
           <input
             type="password"
             id="api-key-input"
-            name="apiKey"
-            placeholder="sk_electoral_..."
+            name="password"
+            placeholder="••••••••••••"
             required
-            autocomplete="off"
+            autocomplete="current-password"
             spellcheck="false"
           />
-          <span class="field__hint">La key se guarda solo en esta sesión. Se borra al cerrar la pestaña.</span>
+          <span class="field__hint">La contraseña queda guardada en este navegador. Puedes cerrar sesión desde Configuración.</span>
         </label>
 
         <div class="setup-actions">
           <button type="submit" class="btn btn--primary" id="connect-btn">
-            <span class="btn__label">Conectar</span>
+            <span class="btn__label">Entrar</span>
             <span class="btn__spinner" hidden></span>
           </button>
-          <a class="link" href="https://app.scrutix.co" target="_blank" rel="noopener">¿No tienes una key? Solicítala aquí</a>
+          <span class="link muted" style="margin:0">Si no tienes contraseña, contacta al administrador del portal.</span>
         </div>
 
         <div id="setup-error" class="alert alert--error" hidden></div>
@@ -331,10 +332,10 @@
       <div class="modal__body">
         <div class="settings-row">
           <div>
-            <strong>API key electoral</strong>
-            <p class="muted">Conexión a scrutix.co · activa para esta sesión.</p>
+            <strong>Sesión del portal</strong>
+            <p class="muted">Contraseña guardada en este navegador.</p>
           </div>
-          <button class="btn btn--ghost" id="logout-btn" type="button">Cambiar key</button>
+          <button class="btn btn--ghost" id="logout-btn" type="button">Cerrar sesión</button>
         </div>
         <div class="settings-row">
           <div>

@@ -1,40 +1,50 @@
 /* ============================================================
-   Electoral API client · scrutix.co
-   Base URL: https://app.scrutix.co/api/electoral/v1
-   Auth:     Authorization: Bearer sk_electoral_<key>
+   Electoral API client
+   Talks to the Cloudflare Worker proxy (see /worker), not directly
+   to scrutix.co — the real API key lives only inside the Worker.
+   The browser sends a shared password via `X-Portal-Password`.
    ============================================================ */
 
 const ElectoralAPI = (() => {
-  const BASE = 'https://app.scrutix.co/api/electoral/v1';
   const MUNICIPALITY_CODE = '214'; // Rionegro, Antioquia
-  const KEY_STORAGE = 'electoral_api_key';
+  const PWD_STORAGE = 'electoral_portal_password';
 
   // In-memory cache: keyed by URL+params hash
   const cache = new Map();
 
-  /** Get API key from sessionStorage. */
-  function getKey() {
-    return sessionStorage.getItem(KEY_STORAGE) || '';
+  /** Resolve the proxy base URL from window config. */
+  function getProxyBase() {
+    const base = (window.PORTAL_CONFIG && window.PORTAL_CONFIG.PROXY_URL) || '';
+    return base.replace(/\/$/, '');
   }
 
-  /** Persist API key for the current tab session. */
-  function setKey(key) {
-    sessionStorage.setItem(KEY_STORAGE, key);
+  /** Whether the frontend is wired up to a real Worker. */
+  function isConfigured() {
+    const base = getProxyBase();
+    return !!base && !/YOUR-/i.test(base);
   }
 
-  /** Clear API key and reset caches. */
-  function clearKey() {
-    sessionStorage.removeItem(KEY_STORAGE);
+  /** Get the access password from localStorage. */
+  function getPassword() {
+    return localStorage.getItem(PWD_STORAGE) || '';
+  }
+
+  function setPassword(value) {
+    localStorage.setItem(PWD_STORAGE, value);
+  }
+
+  function clearPassword() {
+    localStorage.removeItem(PWD_STORAGE);
     cache.clear();
   }
 
-  function hasKey() {
-    return !!getKey();
+  function hasPassword() {
+    return !!getPassword();
   }
 
   /** Build URL with query parameters, skipping empty values. */
   function buildURL(path, params = {}) {
-    const url = new URL(BASE + path);
+    const url = new URL(getProxyBase() + path);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') {
         url.searchParams.set(k, String(v));
@@ -50,6 +60,13 @@ const ElectoralAPI = (() => {
    * @param {object} [opts] - { cache: boolean }
    */
   async function request(path, params = {}, opts = {}) {
+    if (!isConfigured()) {
+      throw new APIError(
+        'El portal no tiene PROXY_URL configurada. Edita js/config.js con la URL del Cloudflare Worker.',
+        { code: 'NO_PROXY' }
+      );
+    }
+
     const url = buildURL(path, params);
     const useCache = opts.cache !== false;
 
@@ -57,9 +74,9 @@ const ElectoralAPI = (() => {
       return cache.get(url);
     }
 
-    const key = getKey();
-    if (!key) {
-      throw new APIError('No hay API key configurada.', { code: 'NO_KEY' });
+    const password = getPassword();
+    if (!password) {
+      throw new APIError('No hay contraseña configurada.', { code: 'NO_AUTH' });
     }
 
     let resp;
@@ -67,12 +84,12 @@ const ElectoralAPI = (() => {
       resp = await fetch(url, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${key}`,
+          'X-Portal-Password': password,
           'Accept': 'application/json',
         },
       });
     } catch (err) {
-      throw new APIError('No se pudo conectar a la API electoral. Verifica tu conexión.', {
+      throw new APIError('No se pudo conectar al servidor. Verifica tu conexión.', {
         code: 'NETWORK',
         cause: err,
       });
@@ -85,10 +102,16 @@ const ElectoralAPI = (() => {
         detail = body?.message || body?.error || '';
       } catch (_) { /* not json */ }
 
-      if (resp.status === 401 || resp.status === 403) {
-        throw new APIError(detail || 'API key inválida o sin permisos.', {
+      if (resp.status === 401) {
+        throw new APIError(detail || 'Contraseña inválida.', {
           code: 'AUTH',
-          status: resp.status,
+          status: 401,
+        });
+      }
+      if (resp.status === 403) {
+        throw new APIError(detail || 'Acceso denegado.', {
+          code: 'AUTH',
+          status: 403,
         });
       }
       if (resp.status === 429) {
@@ -97,7 +120,13 @@ const ElectoralAPI = (() => {
           status: 429,
         });
       }
-      throw new APIError(detail || `Error ${resp.status} de la API.`, {
+      if (resp.status === 502 || resp.status === 504) {
+        throw new APIError(detail || 'La API electoral no está respondiendo.', {
+          code: 'UPSTREAM',
+          status: resp.status,
+        });
+      }
+      throw new APIError(detail || `Error ${resp.status} en la consulta.`, {
         code: 'HTTP',
         status: resp.status,
       });
@@ -108,8 +137,8 @@ const ElectoralAPI = (() => {
     return data;
   }
 
-  /** Validate the current key by hitting /elections. Throws on failure. */
-  async function validateKey() {
+  /** Validate the current password by hitting /elections. Throws on failure. */
+  async function validateAuth() {
     return request('/elections', {}, { cache: false });
   }
 
@@ -126,7 +155,7 @@ const ElectoralAPI = (() => {
     });
   }
 
-  /** GET /benchmark — top candidates and parties for a corporation in a municipality. */
+  /** GET /benchmark — top candidates and parties for a corporation. */
   function getBenchmark(electionId, corporationCode) {
     return request('/benchmark', {
       election_id: electionId,
@@ -177,8 +206,15 @@ const ElectoralAPI = (() => {
   return {
     MUNICIPALITY_CODE,
     APIError,
-    getKey, setKey, clearKey, hasKey,
-    validateKey,
+    isConfigured,
+    getPassword, setPassword, clearPassword, hasPassword,
+    // Backwards-compatible aliases used by older app code paths.
+    hasKey: hasPassword,
+    setKey: setPassword,
+    getKey: getPassword,
+    clearKey: clearPassword,
+    validateKey: validateAuth,
+    validateAuth,
     getElections,
     getCorporations,
     getBenchmark,

@@ -67,26 +67,32 @@ function showToast(msg, kind = '') {
 async function handleSetupSubmit(ev) {
   ev.preventDefault();
   const input = $('#api-key-input');
-  const key = input.value.trim();
-  if (!key) return;
+  const password = input.value.trim();
+  if (!password) return;
 
   const btn = $('#connect-btn');
   const errBox = $('#setup-error');
   errBox.hidden = true;
 
+  if (!ElectoralAPI.isConfigured()) {
+    errBox.textContent = 'El portal no tiene PROXY_URL configurada. Edita js/config.js con la URL del Cloudflare Worker.';
+    errBox.hidden = false;
+    return;
+  }
+
   btn.disabled = true;
   $('.btn__label', btn).hidden = true;
   $('.btn__spinner', btn).hidden = false;
 
-  ElectoralAPI.setKey(key);
+  ElectoralAPI.setPassword(password);
 
   try {
-    await ElectoralAPI.validateKey();
+    await ElectoralAPI.validateAuth();
     showApp();
     bootstrap();
   } catch (err) {
-    ElectoralAPI.clearKey();
-    errBox.textContent = err.message || 'No se pudo validar la API key.';
+    ElectoralAPI.clearPassword();
+    errBox.textContent = err.message || 'No se pudo validar la contraseña.';
     errBox.hidden = false;
   } finally {
     btn.disabled = false;

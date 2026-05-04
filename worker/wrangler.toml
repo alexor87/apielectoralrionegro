@@ -1,0 +1,19 @@
+name = "electoral-proxy-rionegro"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+# ── Public variables (visible in dashboard, OK for non-secrets) ────────────
+[vars]
+# Comma-separated list of CORS origins allowed to call this worker.
+# Set this to your GitHub Pages URL (no trailing slash).
+# Example: "https://alexor87.github.io"
+# For local development you can add: "https://alexor87.github.io,http://localhost:5173"
+ALLOWED_ORIGINS = "https://alexor87.github.io"
+
+# Override the upstream API base if scrutix changes domains.
+# Default (empty) = https://app.scrutix.co/api/electoral/v1
+# UPSTREAM_BASE = "https://app.scrutix.co/api/electoral/v1"
+
+# ── Secrets — set them with `wrangler secret put`, never commit them ───────
+# wrangler secret put SCRUTIX_API_KEY   # value: sk_electoral_...
+# wrangler secret put PORTAL_PASSWORD   # value: <strong password>
