@@ -7,3 +7,5 @@ Thumbs.db
 .idea/
 node_modules/
 .cache/
+.wrangler/
+worker/.wrangler/

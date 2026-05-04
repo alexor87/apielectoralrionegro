@@ -780,6 +780,16 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono);
   color: var(--text-faint);
 }
+.station-card__party {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .station-card__foot {
   display: flex;
   justify-content: space-between;

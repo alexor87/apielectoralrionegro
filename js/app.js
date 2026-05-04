@@ -180,10 +180,11 @@ async function loadCorporations() {
       return;
     }
 
-    // Default: prefer Alcaldía (001), else first
+    // Default: prefer Alcaldía (003 in the Registraduría coding for territoriales),
+    // else any name match, else first.
     const def =
-      state.corporations.find(c => String(c.code) === '001') ||
       state.corporations.find(c => /alcald/i.test(c.name)) ||
+      state.corporations.find(c => String(c.code) === '003') ||
       state.corporations[0];
     state.corporationCode = def.code;
     $('#corporation-select').value = def.code;
@@ -194,12 +195,35 @@ async function loadCorporations() {
   }
 }
 
+// Friendly Spanish labels for known corporation codes (Registraduría · territoriales).
+const CORPORATION_LABELS = {
+  '001': 'Gobernación',
+  '002': 'Asamblea Departamental',
+  '003': 'Alcaldía',
+  '004': 'Concejo Municipal',
+  '005': 'JAL',
+};
+
 function normalizeCorporations(payload) {
   const arr = toArray(payload, 'corporations');
-  return arr.map(c => ({
-    code: String(pick(c, 'code', 'corporation_code', 'id') ?? ''),
-    name: pick(c, 'name', 'title', 'label') || 'Cargo',
-  })).filter(c => c.code);
+  return arr.map(c => {
+    const code = String(pick(c, 'corporation_code', 'code', 'id') ?? '');
+    const rawName = pick(c, 'corporation', 'name', 'title', 'label') || '';
+    return {
+      code,
+      name: CORPORATION_LABELS[code] || titleCase(rawName) || 'Cargo',
+      totalVotes: Number(pick(c, 'total_votes')) || 0,
+    };
+  }).filter(c => c.code);
+}
+
+/** Convert ALL CAPS text to Title Case, leaving acronyms ≤ 3 chars upper. */
+function titleCase(s) {
+  if (!s) return '';
+  return s.toLowerCase().split(/\s+/).map(w => {
+    if (w.length <= 3) return w.toUpperCase();
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }).join(' ');
 }
 
 function populateCorporationSelect() {
@@ -242,49 +266,78 @@ async function loadElectionData() {
   }
 }
 
+// Pseudo-candidates returned by the Registraduría that aren't real candidates:
+// blank votes, null votes, unmarked ballots. They live under party_code "00000"
+// (party_name "CANDIDATOS TOTALES"). We separate them so they don't pollute rankings.
+const INVALID_VOTE_NAMES = new Set(['VOTOS EN BLANCO', 'VOTOS NULOS', 'VOTOS NO MARCADOS']);
+
+function isInvalidVotePseudo(item) {
+  const code = String(item.partyCode ?? item.party_code ?? '');
+  if (code === '00000') return true;
+  const name = String(item.name || item.candidate_name || '').toUpperCase().trim();
+  if (INVALID_VOTE_NAMES.has(name)) return true;
+  return false;
+}
+
 function normalizeBenchmark(payload) {
   if (!payload) return null;
   const root = payload.data || payload;
 
   const candidatesRaw = toArray(root, 'top_candidates', 'candidates');
-  const partiesRaw = toArray(root, 'top_parties', 'parties');
+  const partiesRaw    = toArray(root, 'by_party', 'top_parties', 'parties');
 
-  const candidates = candidatesRaw.map(c => ({
-    name: pick(c, 'name', 'candidate_name', 'full_name') || '—',
-    party: pick(c, 'party', 'party_name', 'political_party') || '—',
-    list: pick(c, 'list_number', 'list', 'ballot_number'),
-    votes: Number(pick(c, 'votes', 'total_votes', 'vote_count')) || 0,
-    pct: Number(pick(c, 'percentage', 'pct', 'vote_pct')) || null,
+  const allCandidates = candidatesRaw.map(c => ({
+    name:      pick(c, 'candidate_name', 'name', 'full_name') || '—',
+    party:     pick(c, 'party_name', 'party', 'political_party') || '—',
+    partyCode: pick(c, 'party_code'),
+    list:      pick(c, 'list_number', 'list', 'ballot_number'),
+    votes:     Number(pick(c, 'votes', 'total_votes', 'vote_count')) || 0,
+    pct:       Number(pick(c, 'pct', 'percentage', 'vote_pct')) || null,
   }));
 
-  const parties = partiesRaw.map(p => ({
-    name: pick(p, 'name', 'party_name') || '—',
-    votes: Number(pick(p, 'votes', 'total_votes')) || 0,
-    pct: Number(pick(p, 'percentage', 'pct', 'vote_pct')) || null,
+  const allParties = partiesRaw.map(p => ({
+    name:      pick(p, 'party_name', 'name') || '—',
+    partyCode: pick(p, 'party_code'),
+    votes:     Number(pick(p, 'votes', 'total_votes')) || 0,
+    pct:       Number(pick(p, 'pct', 'percentage', 'vote_pct')) || null,
+    candidatesCount: Number(pick(p, 'candidates')) || null,
   }));
 
-  // Totals: prefer explicit, else derive
-  const totals = pick(root, 'totals', 'summary') || {};
-  const totalVotes = Number(
-    pick(totals, 'valid_votes', 'total_valid_votes', 'total_votes') ??
-    pick(root, 'total_votes', 'valid_votes')
-  ) || candidates.reduce((s, c) => s + c.votes, 0);
+  // Split real entries from invalid-vote pseudo-entries.
+  const candidates = allCandidates.filter(c => !isInvalidVotePseudo(c));
+  const parties    = allParties.filter(p => !isInvalidVotePseudo(p));
 
-  const totalCandidates = Number(pick(totals, 'candidates_count')) || candidates.length;
-  const totalParties = Number(pick(totals, 'parties_count')) || parties.length;
-  const totalStations = Number(
-    pick(totals, 'stations_count', 'polling_stations_count')
-  ) || null;
+  // Totals: prefer explicit, else derive from full list (incl. invalid votes).
+  const totalVotes = Number(pick(root, 'total_votes', 'valid_votes', 'total_valid_votes'))
+    || allCandidates.reduce((s, c) => s + c.votes, 0);
 
-  // Compute pct if missing
-  candidates.forEach(c => {
+  // Tally invalid-vote pseudo-entries for a separate "blank/null/unmarked" metric.
+  const invalidByName = {};
+  for (const c of allCandidates) {
+    if (!isInvalidVotePseudo(c)) continue;
+    invalidByName[c.name.toUpperCase().trim()] = c.votes;
+  }
+  const blankVotes    = invalidByName['VOTOS EN BLANCO']    || 0;
+  const nullVotes     = invalidByName['VOTOS NULOS']        || 0;
+  const unmarkedVotes = invalidByName['VOTOS NO MARCADOS']  || 0;
+
+  // Compute % if missing (relative to total valid votes).
+  for (const c of candidates) {
     if (c.pct == null) c.pct = totalVotes ? (c.votes / totalVotes) * 100 : 0;
-  });
-  parties.forEach(p => {
+  }
+  for (const p of parties) {
     if (p.pct == null) p.pct = totalVotes ? (p.votes / totalVotes) * 100 : 0;
-  });
+  }
 
-  return { candidates, parties, totalVotes, totalCandidates, totalParties, totalStations };
+  return {
+    candidates,
+    parties,
+    totalVotes,
+    totalCandidates: candidates.length,
+    totalParties:    parties.length,
+    totalStations:   Number(pick(root, 'polling_stations_count', 'stations_count')) || null,
+    invalidVotes: { blank: blankVotes, null: nullVotes, unmarked: unmarkedVotes },
+  };
 }
 
 function normalizeMap(payload) {
@@ -293,29 +346,27 @@ function normalizeMap(payload) {
   const stationsRaw = toArray(root, 'polling_stations', 'stations', 'puestos');
 
   const stations = stationsRaw.map(s => {
-    const candsRaw = toArray(s, 'top_candidates', 'candidates', 'results');
-    const candidates = candsRaw.map(c => ({
-      name: pick(c, 'name', 'candidate_name', 'full_name') || '—',
-      party: pick(c, 'party', 'party_name') || '—',
-      votes: Number(pick(c, 'votes', 'total_votes')) || 0,
-      pct: Number(pick(c, 'percentage', 'pct')) || null,
-    }));
-
-    const totalVotes = Number(
-      pick(s, 'total_votes', 'valid_votes', 'votes')
-    ) || candidates.reduce((sum, c) => sum + c.votes, 0);
-
-    candidates.forEach(c => {
-      if (c.pct == null) c.pct = totalVotes ? (c.votes / totalVotes) * 100 : 0;
-    });
+    const totalVotes = Number(pick(s, 'total_votes', 'valid_votes', 'votes')) || 0;
+    const topVotes   = Number(pick(s, 'top_candidate_votes', 'top_votes')) || 0;
+    const topName    = pick(s, 'top_candidate_name', 'top_candidate') || '—';
+    const topParty   = pick(s, 'top_party_name', 'top_party') || '—';
+    const topPct     = totalVotes ? (topVotes / totalVotes) * 100 : 0;
 
     return {
-      code: String(pick(s, 'code', 'station_code', 'polling_station_code', 'id') ?? ''),
-      name: pick(s, 'name', 'station_name', 'polling_station_name') || 'Puesto',
-      zone: pick(s, 'zone', 'comuna', 'district', 'sector') || '',
-      address: pick(s, 'address', 'location') || '',
+      code:       String(pick(s, 'polling_station_code', 'station_code', 'code', 'id') ?? ''),
+      name:       pick(s, 'polling_station_name', 'station_name', 'name') || 'Puesto',
+      zone:       pick(s, 'commune', 'zone', 'comuna', 'district') || '',
+      zoneCode:   pick(s, 'commune_code', 'zone_code') || '',
+      address:    pick(s, 'address', 'location') || '',
       totalVotes,
-      candidates: candidates.sort((a, b) => b.votes - a.votes),
+      mesaCount:  Number(pick(s, 'mesa_count', 'tables_count')) || 0,
+      lat:        pick(s, 'lat'),
+      lng:        pick(s, 'lng'),
+      topCandidate: { name: topName, party: topParty, votes: topVotes, pct: topPct },
+      // Kept for compatibility with code that expects an array; only the winner is known here.
+      candidates: topName !== '—'
+        ? [{ name: topName, party: topParty, votes: topVotes, pct: topPct }]
+        : [],
     };
   }).filter(s => s.code);
 
@@ -383,6 +434,14 @@ function renderSummary() {
   $('#m-candidates').textContent = fmt(b.totalCandidates);
   $('#m-parties').textContent = fmt(b.totalParties);
   $('#m-stations').textContent = fmt(stationsCount);
+
+  // Hint on the votes card: surface blank/null votes (politically meaningful).
+  const inv = b.invalidVotes || {};
+  const parts = [];
+  if (inv.blank)    parts.push(`${fmt(inv.blank)} en blanco`);
+  if (inv.null)     parts.push(`${fmt(inv.null)} nulos`);
+  if (inv.unmarked) parts.push(`${fmt(inv.unmarked)} no marcados`);
+  $('#m-total-votes-hint').textContent = parts.length ? parts.join(' · ') : '';
 
   const winner = b.candidates[0];
   if (winner) {
@@ -533,7 +592,7 @@ function renderStations() {
   }
 
   $('#station-grid').innerHTML = stations.map(s => {
-    const top3 = s.candidates.slice(0, 3);
+    const w = s.topCandidate;
     return `
       <button class="station-card" data-station="${escapeHtml(s.code)}" type="button">
         <div class="station-card__head">
@@ -541,19 +600,17 @@ function renderStations() {
           ${s.zone ? `<span class="station-card__zone">${escapeHtml(s.zone)}</span>` : ''}
         </div>
         <div class="station-card__mini">
-          <div class="station-card__bars">
-            ${top3.map((c, i) => `
-              <div class="station-mini-bar">
-                <span class="station-mini-bar__name">${escapeHtml(c.name)}</span>
-                <span class="station-mini-bar__pct">${fmtPct(c.pct)}</span>
-                <div class="station-mini-bar__bar">
-                  <div class="station-mini-bar__fill" style="width:${Math.min(100, c.pct)}%; background:${ChartHelpers.color(i)}"></div>
-                </div>
-              </div>`).join('')}
+          <div class="station-mini-bar">
+            <span class="station-mini-bar__name">${escapeHtml(w.name)}</span>
+            <span class="station-mini-bar__pct">${fmtPct(w.pct)}</span>
+            <div class="station-mini-bar__bar">
+              <div class="station-mini-bar__fill" style="width:${Math.min(100, w.pct)}%; background:${ChartHelpers.color(0)}"></div>
+            </div>
           </div>
+          <div class="station-card__party">${escapeHtml(w.party)}</div>
         </div>
         <div class="station-card__foot">
-          <span class="station-card__total-label">Total votos</span>
+          <span class="station-card__total-label">${fmt(s.mesaCount)} mesas</span>
           <span class="station-card__total">${fmt(s.totalVotes)}</span>
         </div>
       </button>
@@ -609,17 +666,28 @@ async function openStationDetail(stationCode) {
 
 function renderStationDetail(detail, station) {
   const root = detail?.data || detail || {};
-  const candidatesRaw = toArray(root, 'candidates', 'results') ;
-  const candidates = (candidatesRaw.length > 0 ? candidatesRaw : station.candidates).map(c => ({
-    name: pick(c, 'name', 'candidate_name', 'full_name') || c.name || '—',
-    party: pick(c, 'party', 'party_name') || c.party || '—',
-    votes: Number(pick(c, 'votes', 'total_votes')) || c.votes || 0,
-    pct: Number(pick(c, 'percentage', 'pct')) || c.pct || null,
-  })).sort((a, b) => b.votes - a.votes);
+
+  // /station returns top_candidates with the same shape as /benchmark.
+  const candidatesRaw = toArray(root, 'top_candidates', 'candidates', 'results');
+  const candidatesAll = (candidatesRaw.length > 0
+    ? candidatesRaw.map(c => ({
+        name:      pick(c, 'candidate_name', 'name', 'full_name') || '—',
+        party:     pick(c, 'party_name', 'party') || '—',
+        partyCode: pick(c, 'party_code'),
+        votes:     Number(pick(c, 'votes', 'total_votes')) || 0,
+        pct:       Number(pick(c, 'pct', 'percentage')) || null,
+      }))
+    : station.candidates);
+
+  const candidates = candidatesAll
+    .filter(c => !isInvalidVotePseudo(c))
+    .sort((a, b) => b.votes - a.votes);
 
   const totalVotes = Number(pick(root, 'total_votes', 'valid_votes')) || station.totalVotes;
-  const tablesRaw = toArray(root, 'tables', 'mesas');
-  const totalTables = Number(pick(root, 'tables_count', 'total_tables')) || tablesRaw.length;
+
+  // Per-mesa data: only winner + total per mesa (no candidate-level breakdown).
+  const byMesaRaw = toArray(root, 'by_mesa', 'tables', 'mesas');
+  const totalMesas = byMesaRaw.length || station.mesaCount;
 
   candidates.forEach(c => {
     if (c.pct == null) c.pct = totalVotes ? (c.votes / totalVotes) * 100 : 0;
@@ -627,35 +695,39 @@ function renderStationDetail(detail, station) {
 
   const maxV = Math.max(...candidates.map(c => c.votes), 1);
 
-  // Tables table — only if API returned per-table breakdown
-  let tablesHtml = '';
-  if (tablesRaw.length > 0) {
-    // Collect candidate names from tables (top 3 by total votes)
-    const top3 = candidates.slice(0, 3);
-    tablesHtml = `
-      <h4 class="station-detail__h3">Mesas</h4>
+  // Invalid-vote tally (blanco/nulos/no marcados) for this station.
+  const invalid = candidatesAll.filter(c => isInvalidVotePseudo(c));
+  const invalidTotal = invalid.reduce((s, c) => s + c.votes, 0);
+
+  const invalidRow = invalidTotal > 0 ? `
+      <div class="station-detail__metric">
+        <span class="station-detail__metric-label">Blanco / Nulos</span>
+        <span class="station-detail__metric-value">${fmt(invalidTotal)}</span>
+      </div>` : '';
+
+  // Mesas table: simple winner-per-mesa view.
+  let mesasHtml = '';
+  if (byMesaRaw.length > 0) {
+    mesasHtml = `
+      <h4 class="station-detail__h3">Resultados por mesa</h4>
       <table class="tables-table">
         <thead>
           <tr>
             <th>Mesa</th>
-            ${top3.map(c => `<th>${escapeHtml(shortName(c.name))}</th>`).join('')}
-            <th>Total</th>
+            <th>Ganador</th>
+            <th>Total votos</th>
           </tr>
         </thead>
         <tbody>
-          ${tablesRaw.map(t => {
-            const tNum = pick(t, 'number', 'table_number', 'mesa', 'id') ?? '—';
-            const tTotal = Number(pick(t, 'total_votes', 'valid_votes', 'votes')) || 0;
-            const tCands = toArray(t, 'candidates', 'results');
-            const cells = top3.map(target => {
-              const found = tCands.find(c =>
-                (pick(c, 'name', 'candidate_name') || '').toLowerCase() ===
-                target.name.toLowerCase()
-              );
-              const v = Number(pick(found, 'votes', 'total_votes')) || 0;
-              return `<td>${fmt(v)}</td>`;
-            }).join('');
-            return `<tr><td>Mesa ${escapeHtml(String(tNum))}</td>${cells}<td>${fmt(tTotal)}</td></tr>`;
+          ${byMesaRaw.map(t => {
+            const num   = pick(t, 'mesa', 'number', 'table_number', 'id') ?? '—';
+            const total = Number(pick(t, 'total_votes', 'valid_votes', 'votes')) || 0;
+            const top   = pick(t, 'top_candidate', 'winner', 'name') || '—';
+            return `<tr>
+              <td>Mesa ${escapeHtml(String(num))}</td>
+              <td style="text-align:left">${escapeHtml(top)}</td>
+              <td>${fmt(total)}</td>
+            </tr>`;
           }).join('')}
         </tbody>
       </table>`;
@@ -669,12 +741,13 @@ function renderStationDetail(detail, station) {
       </div>
       <div class="station-detail__metric">
         <span class="station-detail__metric-label">Mesas</span>
-        <span class="station-detail__metric-value">${fmt(totalTables)}</span>
+        <span class="station-detail__metric-value">${fmt(totalMesas)}</span>
       </div>
       <div class="station-detail__metric">
         <span class="station-detail__metric-label">Candidatos</span>
         <span class="station-detail__metric-value">${fmt(candidates.length)}</span>
       </div>
+      ${invalidRow}
     </div>
 
     <h4 class="station-detail__h3">Resultados por candidato</h4>
@@ -689,7 +762,7 @@ function renderStationDetail(detail, station) {
       })).join('')}
     </div>
 
-    ${tablesHtml}
+    ${mesasHtml}
   `;
 }
 
