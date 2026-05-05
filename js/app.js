@@ -541,8 +541,10 @@ function normalizeMap(payload) {
   if (!payload) return null;
   const root = payload.data || payload;
   const stationsRaw = toArray(root, 'polling_stations', 'stations', 'puestos');
+  console.log('[diag] /map raw stations:', stationsRaw.length);
+  console.log('[diag] /map root keys:', Object.keys(root || {}));
 
-  const stations = stationsRaw.map(s => {
+  const stationsBuilt = stationsRaw.map(s => {
     const totalVotes = Number(pick(s, 'total_votes', 'valid_votes', 'votes')) || 0;
     let topVotes     = Number(pick(s, 'top_candidate_votes', 'top_votes')) || 0;
     let topName      = pick(s, 'top_candidate_name', 'top_candidate') || '—';
@@ -582,7 +584,18 @@ function normalizeMap(payload) {
         ? [{ name: topName, party: topParty, votes: topVotes, pct: topPct }]
         : [],
     };
-  }).filter(s => s.code);
+  });
+  const stations = stationsBuilt.filter(s => s.code);
+  console.log('[diag] /map after filter (with code):', stations.length);
+  const dropped = stationsBuilt.filter(s => !s.code);
+  if (dropped.length) {
+    console.log('[diag] dropped count:', dropped.length);
+    console.log('[diag] dropped names sample:', dropped.slice(0, 5).map(s => s.name));
+    console.log('[diag] raw sample keys (first 3):',
+      stationsRaw.slice(0, 3).map(s => Object.keys(s)));
+    console.log('[diag] raw sample (first 1):', stationsRaw[0]);
+  }
+  console.log('[diag] benchmark.totalStations:', state.benchmark?.totalStations);
 
   // Sort by total votes descending
   stations.sort((a, b) => b.totalVotes - a.totalVotes);
