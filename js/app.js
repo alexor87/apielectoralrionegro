@@ -287,6 +287,7 @@ function normalizeBenchmark(payload) {
   const partiesRaw    = toArray(root, 'by_party', 'top_parties', 'parties');
 
   const allCandidates = candidatesRaw.map(c => ({
+    code:      pick(c, 'candidate_code'),
     name:      pick(c, 'candidate_name', 'name', 'full_name') || '—',
     party:     pick(c, 'party_name', 'party', 'political_party') || '—',
     partyCode: pick(c, 'party_code'),
@@ -671,6 +672,7 @@ function renderStationDetail(detail, station) {
   const candidatesRaw = toArray(root, 'top_candidates', 'candidates', 'results');
   const candidatesAll = (candidatesRaw.length > 0
     ? candidatesRaw.map(c => ({
+        code:      pick(c, 'candidate_code'),
         name:      pick(c, 'candidate_name', 'name', 'full_name') || '—',
         party:     pick(c, 'party_name', 'party') || '—',
         partyCode: pick(c, 'party_code'),
@@ -705,32 +707,113 @@ function renderStationDetail(detail, station) {
         <span class="station-detail__metric-value">${fmt(invalidTotal)}</span>
       </div>` : '';
 
-  // Mesas table: simple winner-per-mesa view.
+  // Mesas table.
+  // - If mesas come with per-candidate breakdown (`candidates` array), render
+  //   a pivot: Mesa × top5 + Otros + Blanco/Nulos + Total, with the per-row
+  //   winner highlighted.
+  // - Else fall back to the basic Mesa · Ganador · Total table.
   let mesasHtml = '';
   if (byMesaRaw.length > 0) {
-    mesasHtml = `
-      <h4 class="station-detail__h3">Resultados por mesa</h4>
-      <table class="tables-table">
-        <thead>
-          <tr>
-            <th>Mesa</th>
-            <th>Ganador</th>
-            <th>Total votos</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${byMesaRaw.map(t => {
-            const num   = pick(t, 'mesa', 'number', 'table_number', 'id') ?? '—';
-            const total = Number(pick(t, 'total_votes', 'valid_votes', 'votes')) || 0;
-            const top   = pick(t, 'top_candidate', 'winner', 'name') || '—';
-            return `<tr>
-              <td>Mesa ${escapeHtml(String(num))}</td>
-              <td style="text-align:left">${escapeHtml(top)}</td>
-              <td>${fmt(total)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`;
+    const hasMesaCandidates = Array.isArray(byMesaRaw[0]?.candidates);
+
+    if (hasMesaCandidates) {
+      const topN = candidates.slice(0, 5);
+
+      const rows = byMesaRaw.map(m => {
+        const num   = pick(m, 'mesa', 'number', 'table_number', 'id') ?? '—';
+        const total = Number(pick(m, 'total_votes', 'valid_votes', 'votes')) || 0;
+        const cands = toArray(m, 'candidates');
+
+        // Lookup mesa-votes for a target candidate by code (preferred) or name.
+        const lookup = (target) => {
+          let found = null;
+          if (target.code) {
+            found = cands.find(c => pick(c, 'candidate_code') === target.code);
+          }
+          if (!found) {
+            const tname = (target.name || '').toLowerCase();
+            found = cands.find(c => (pick(c, 'candidate_name') || '').toLowerCase() === tname);
+          }
+          return Number(pick(found, 'votes', 'total_votes')) || 0;
+        };
+
+        // Build top-N votes for this mesa
+        const topVotes = topN.map(t => lookup(t));
+        const winnerIdx = topVotes.reduce((best, v, i) => v > topVotes[best] ? i : best, 0);
+
+        // "Otros" = real candidates not in top N. "Blanco/Nulos" = pseudos.
+        let otros = 0, invalid = 0;
+        for (const c of cands) {
+          const obj = {
+            name: pick(c, 'candidate_name'),
+            party_code: pick(c, 'party_code'),
+          };
+          const v = Number(pick(c, 'votes', 'total_votes')) || 0;
+          if (isInvalidVotePseudo(obj)) {
+            invalid += v;
+          } else {
+            const cd = pick(c, 'candidate_code');
+            const isTop = topN.some(t => t.code && t.code === cd);
+            if (!isTop) otros += v;
+          }
+        }
+
+        const cells = topVotes.map((v, i) =>
+          `<td class="${i === winnerIdx && v > 0 ? 'mesa-winner' : ''}">${fmt(v)}</td>`
+        ).join('');
+
+        return `<tr>
+          <td class="mesa-row__num">Mesa ${escapeHtml(String(num))}</td>
+          ${cells}
+          <td class="mesa-row__sub">${otros > 0 ? fmt(otros) : '—'}</td>
+          <td class="mesa-row__sub">${invalid > 0 ? fmt(invalid) : '—'}</td>
+          <td class="mesa-row__total">${fmt(total)}</td>
+        </tr>`;
+      }).join('');
+
+      mesasHtml = `
+        <h4 class="station-detail__h3">Resultados por mesa · ${fmt(byMesaRaw.length)} mesas</h4>
+        <p class="muted" style="margin:-6px 0 10px">La celda ganadora de cada mesa aparece destacada.</p>
+        <div class="mesa-table-wrap">
+          <table class="tables-table mesa-table">
+            <thead>
+              <tr>
+                <th class="mesa-row__num">Mesa</th>
+                ${topN.map(c => `<th title="${escapeHtml(c.name)} · ${escapeHtml(c.party)}">${escapeHtml(shortName(c.name))}</th>`).join('')}
+                <th class="mesa-row__sub" title="Suma de candidatos fuera del top 5">Otros</th>
+                <th class="mesa-row__sub" title="Votos en blanco, nulos y no marcados">Blanco/Nulos</th>
+                <th class="mesa-row__total">Total</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    } else {
+      // Fallback: only winner-per-mesa available
+      mesasHtml = `
+        <h4 class="station-detail__h3">Resultados por mesa · ${fmt(byMesaRaw.length)} mesas</h4>
+        <table class="tables-table">
+          <thead>
+            <tr>
+              <th>Mesa</th>
+              <th>Ganador</th>
+              <th>Total votos</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${byMesaRaw.map(t => {
+              const num   = pick(t, 'mesa', 'number', 'table_number', 'id') ?? '—';
+              const total = Number(pick(t, 'total_votes', 'valid_votes', 'votes')) || 0;
+              const top   = pick(t, 'top_candidate', 'winner', 'name') || '—';
+              return `<tr>
+                <td>Mesa ${escapeHtml(String(num))}</td>
+                <td style="text-align:left">${escapeHtml(top)}</td>
+                <td>${fmt(total)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
   }
 
   $('#station-modal-body').innerHTML = `
@@ -1020,12 +1103,12 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+/** Compact name for tight table headers: prefer the last two surnames. */
 function shortName(name) {
   if (!name) return '—';
   const parts = name.trim().split(/\s+/);
-  if (parts.length <= 2) return name;
-  // Take first name + last surname
-  return `${parts[0]} ${parts[parts.length - 1]}`;
+  if (parts.length <= 2) return titleCase(name);
+  return titleCase(parts.slice(-2).join(' '));
 }
 
 function emptyState(text) {
