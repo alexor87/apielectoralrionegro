@@ -18,7 +18,8 @@ const state = {
   view: 'summary',
   partyFilter: '',
   stationSearch: '',
-  mapMode: 'votes',     // 'votes' | 'winner'
+  mapMode: 'votes',           // 'votes' | 'winner' (only used when no candidate selected)
+  mapCandidate: '',           // candidate name, or '' for "ganador por puesto"
   loading: false,
 };
 
@@ -27,6 +28,15 @@ const mapState = {
   map: null,
   heatLayer: null,
   markersLayer: null,
+};
+
+// Per-station candidate-vote enrichment (lazy-loaded on first map view).
+// `byCandidate` is a Map<candidateName, Map<stationCode, votes>>.
+const mapEnrich = {
+  forKey: null,    // electionId|corporationCode this data belongs to
+  loading: false,
+  done: false,
+  byCandidate: new Map(),
 };
 
 // ----------------------------------------------------------------
@@ -259,6 +269,14 @@ async function loadElectionData() {
     ]);
     state.benchmark = normalizeBenchmark(bench);
     state.mapData = normalizeMap(map);
+
+    // Reset map state for the new election/cargo
+    mapEnrich.forKey = null;
+    mapEnrich.loading = false;
+    mapEnrich.done = false;
+    mapEnrich.byCandidate = new Map();
+    state.mapCandidate = '';
+    if (mapState._fitted) mapState._fitted = false;
 
     $('#ai-global-btn').disabled = false;
     renderAll();
@@ -777,9 +795,139 @@ function renderStations() {
 const MAP_DEFAULT_CENTER = [6.155, -75.374];
 const MAP_DEFAULT_ZOOM   = 13;
 
+// Single-color gradient used when filtering by a specific candidate
+// (intensity = relative votes for that candidate at each station).
+const HEAT_GRADIENT_INTENSITY = {
+  0.0: '#1e3a8a',
+  0.3: '#0891b2',
+  0.55: '#65a30d',
+  0.75: '#f59e0b',
+  1.0: '#dc2626',
+};
+
 function getMappableStations() {
   const list = state.mapData?.stations || [];
   return list.filter(s => Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)));
+}
+
+/**
+ * Build a stable color palette: top candidates from the global ranking get
+ * curated colors; everyone else is gray. Returns Map<candidateName, hexColor>.
+ */
+function buildCandidatePalette() {
+  const palette = new Map();
+  const top = (state.benchmark?.candidates || []).slice(0, 8);
+  top.forEach((c, i) => palette.set(c.name, ChartHelpers.color(i)));
+  return palette;
+}
+
+const PALETTE_OTHER = '#a3a3a3';
+
+/**
+ * Lazy-load /station detail for every mappable puesto, in parallel chunks.
+ * Builds `mapEnrich.byCandidate` so the candidate filter can render heatmaps
+ * weighted by per-candidate votes. Idempotent for the current election+cargo.
+ */
+async function ensureMapEnriched() {
+  const key = `${state.electionId}|${state.corporationCode}`;
+
+  // Reset if election/cargo changed
+  if (mapEnrich.forKey && mapEnrich.forKey !== key) {
+    mapEnrich.forKey = null;
+    mapEnrich.loading = false;
+    mapEnrich.done = false;
+    mapEnrich.byCandidate = new Map();
+  }
+  if (mapEnrich.done || mapEnrich.loading) return;
+
+  const stations = getMappableStations();
+  if (stations.length === 0) return;
+
+  mapEnrich.forKey = key;
+  mapEnrich.loading = true;
+  mapEnrich.byCandidate = new Map();
+
+  showMapProgress(0, stations.length);
+
+  const CHUNK = 6;
+  let done = 0;
+  for (let i = 0; i < stations.length; i += CHUNK) {
+    // Bail if user changed election/cargo while we were fetching.
+    if (mapEnrich.forKey !== `${state.electionId}|${state.corporationCode}`) {
+      mapEnrich.loading = false;
+      hideMapProgress();
+      return;
+    }
+    const chunk = stations.slice(i, i + CHUNK);
+    const results = await Promise.all(chunk.map(s =>
+      ElectoralAPI.getStation(state.electionId, state.corporationCode, s.code)
+        .then(r => ({ station: s, detail: r }))
+        .catch(() => ({ station: s, detail: null }))
+    ));
+    for (const { station, detail } of results) {
+      if (!detail) continue;
+      const root = detail.data || detail;
+      const cands = toArray(root, 'top_candidates', 'candidates');
+      for (const c of cands) {
+        const name = pick(c, 'candidate_name', 'name');
+        if (!name) continue;
+        if (isInvalidVotePseudo({ name, party_code: pick(c, 'party_code') })) continue;
+        const votes = Number(pick(c, 'votes', 'total_votes')) || 0;
+        let perStation = mapEnrich.byCandidate.get(name);
+        if (!perStation) {
+          perStation = new Map();
+          mapEnrich.byCandidate.set(name, perStation);
+        }
+        perStation.set(station.code, votes);
+      }
+    }
+    done += chunk.length;
+    showMapProgress(done, stations.length);
+  }
+
+  mapEnrich.loading = false;
+  mapEnrich.done = true;
+  hideMapProgress();
+
+  // If the user is on the map view, repaint to reflect the new filter options
+  // and the (possibly) candidate-specific heatmap they already selected.
+  if (state.view === 'map') renderMap();
+}
+
+function showMapProgress(done, total) {
+  const box = $('#map-progress');
+  if (!box) return;
+  box.hidden = false;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  $('#map-progress-fill').style.width = `${pct}%`;
+  $('#map-progress-text').textContent = `Cargando detalle por puesto · ${done} / ${total}`;
+}
+
+function hideMapProgress() {
+  const box = $('#map-progress');
+  if (box) box.hidden = true;
+}
+
+function populateMapCandidateFilter() {
+  const sel = $('#map-candidate-filter');
+  if (!sel) return;
+
+  const candidates = (state.benchmark?.candidates || []).slice(0, 30);
+  const current = state.mapCandidate;
+
+  sel.innerHTML = '<option value="">Ganador por puesto</option>' +
+    candidates.map(c => {
+      const label = `${c.name}${c.party && c.party !== '—' ? ' · ' + c.party : ''}`;
+      return `<option value="${escapeHtml(c.name)}">${escapeHtml(label)}</option>`;
+    }).join('');
+
+  // Restore selection if still valid
+  if (current && candidates.some(c => c.name === current)) {
+    sel.value = current;
+  } else {
+    sel.value = '';
+    state.mapCandidate = '';
+  }
 }
 
 function renderMap() {
@@ -813,14 +961,23 @@ function renderMap() {
       openStationDetail(btn.dataset.openStation);
     });
   } else {
-    // Container size may have changed while hidden — recompute layout.
     setTimeout(() => mapState.map.invalidateSize(), 50);
   }
 
+  populateMapCandidateFilter();
+  // Mode toggle is irrelevant when filtering by a specific candidate.
+  const modeSeg = $('#map-mode-seg');
+  if (modeSeg) modeSeg.style.display = state.mapCandidate ? 'none' : '';
+
+  // Kick off enrichment in the background on first map render (or on
+  // first candidate-filter selection — see the change handler).
+  if (!mapEnrich.done && !mapEnrich.loading) {
+    ensureMapEnriched();
+  }
+
   const stations = getMappableStations();
+  const palette = buildCandidatePalette();
   const hint = $('#map-legend-hint');
-  $('#map-legend-title').textContent =
-    state.mapMode === 'winner' ? 'Intensidad · % del ganador' : 'Intensidad · votos totales';
 
   // Wipe previous heat + markers
   if (mapState.heatLayer) {
@@ -831,47 +988,98 @@ function renderMap() {
 
   if (stations.length === 0) {
     hint.textContent = 'Esta elección no incluye coordenadas geográficas para los puestos.';
+    updateLegend({ kind: 'empty' });
     return;
   }
 
-  // Build heat data: [lat, lng, intensity 0..1]
-  const valueOf = state.mapMode === 'winner'
-    ? (s) => Number(s.topCandidate?.pct) || 0
-    : (s) => Number(s.totalVotes) || 0;
+  // Decide what we're plotting:
+  //   - candidate selected → heatmap weighted by votes for that candidate,
+  //                          markers tinted by intensity for that candidate
+  //   - else               → heatmap by votos/% ganador (mode toggle),
+  //                          markers colored by winner palette
+  const candidateName = state.mapCandidate;
+  let valueOf, headerLabel;
+
+  if (candidateName) {
+    const perStation = mapEnrich.byCandidate.get(candidateName);
+    valueOf = (s) => (perStation?.get(s.code)) || 0;
+    headerLabel = `Votos de ${candidateName}`;
+  } else if (state.mapMode === 'winner') {
+    valueOf = (s) => Number(s.topCandidate?.pct) || 0;
+    headerLabel = 'Intensidad · % del ganador';
+  } else {
+    valueOf = (s) => Number(s.totalVotes) || 0;
+    headerLabel = 'Intensidad · votos totales';
+  }
 
   const values = stations.map(valueOf);
   const maxV = Math.max(...values, 1);
 
-  const heatPoints = stations.map(s => [
-    Number(s.lat),
-    Number(s.lng),
-    Math.max(0.05, valueOf(s) / maxV),  // floor so even small puestos show
-  ]);
+  // Build heat data: [lat, lng, intensity 0..1].
+  // For the candidate-specific view, no floor — stations where the candidate
+  // got 0 votes should be invisible in the heat layer.
+  const heatPoints = stations.map(s => {
+    const v = valueOf(s);
+    const w = candidateName
+      ? (v > 0 ? v / maxV : 0)
+      : Math.max(0.05, v / maxV);
+    return [Number(s.lat), Number(s.lng), w];
+  }).filter(p => p[2] > 0);
 
-  mapState.heatLayer = L.heatLayer(heatPoints, {
-    radius: 28,
-    blur: 22,
-    minOpacity: 0.35,
-    maxZoom: 17,
-    gradient: {
-      0.0: '#1e3a8a',  // deep blue
-      0.3: '#0891b2',  // cyan
-      0.55: '#65a30d', // lime
-      0.75: '#f59e0b', // amber
-      1.0: '#dc2626',  // red — hottest
-    },
-  }).addTo(mapState.map);
+  if (heatPoints.length > 0) {
+    mapState.heatLayer = L.heatLayer(heatPoints, {
+      radius: 28,
+      blur: 22,
+      minOpacity: 0.35,
+      maxZoom: 17,
+      gradient: HEAT_GRADIENT_INTENSITY,
+    }).addTo(mapState.map);
+  }
 
-  // Lightweight clickable markers per station
+  // Markers — colored differently depending on view
   for (const s of stations) {
+    let fillColor;
+    let radius = 6;
+    let strokeColor = '#0a0a0a';
+
+    if (candidateName) {
+      // Single-candidate view: tint by intensity
+      const v = valueOf(s);
+      if (v <= 0) {
+        fillColor = '#e5e5e3';
+        strokeColor = '#a3a3a3';
+        radius = 4;
+      } else {
+        fillColor = colorForRamp(v / maxV);
+        radius = 5 + Math.round((v / maxV) * 5);  // 5..10
+      }
+    } else {
+      // Winner-per-puesto view: color by the candidate who won there
+      const winnerName = s.topCandidate?.name;
+      fillColor = palette.get(winnerName) || PALETTE_OTHER;
+      radius = Math.max(5, Math.min(11, 4 + Math.round(Math.sqrt(s.totalVotes) / 18)));
+    }
+
     const m = L.circleMarker([Number(s.lat), Number(s.lng)], {
-      radius: 5,
-      color: '#0a0a0a',
+      radius,
+      color: strokeColor,
       weight: 1,
-      fillColor: '#ffffff',
-      fillOpacity: 0.85,
+      fillColor,
+      fillOpacity: 0.92,
     });
+
     const w = s.topCandidate || {};
+    const candidateRow = candidateName
+      ? `<div class="map-popup__winner" style="margin-top:4px">
+           <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${valueOf(s) > 0 ? colorForRamp(valueOf(s) / maxV) : '#e5e5e3'};margin-right:6px;vertical-align:middle"></span>
+           ${escapeHtml(candidateName)}: <strong>${fmt(valueOf(s))}</strong> votos
+         </div>`
+      : (w.name && w.name !== '—' ? `
+        <div class="map-popup__winner">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${palette.get(w.name) || PALETTE_OTHER};margin-right:6px;vertical-align:middle"></span>
+          Ganador: <strong>${escapeHtml(w.name)}</strong> · ${fmtPct(w.pct)}
+        </div>` : '');
+
     m.bindPopup(`
       <div class="map-popup">
         <div class="map-popup__name">${escapeHtml(s.name)}</div>
@@ -879,10 +1087,7 @@ function renderMap() {
         <div class="map-popup__stat">
           <strong>${fmt(s.totalVotes)}</strong> votos · ${fmt(s.mesaCount)} mesas
         </div>
-        ${w.name && w.name !== '—' ? `
-          <div class="map-popup__winner">
-            Ganador: <strong>${escapeHtml(w.name)}</strong> · ${fmtPct(w.pct)}
-          </div>` : ''}
+        ${candidateRow}
         <button type="button" class="map-popup__btn" data-open-station="${escapeHtml(s.code)}">
           Ver detalle
         </button>
@@ -891,13 +1096,100 @@ function renderMap() {
     m.addTo(mapState.markersLayer);
   }
 
-  // Fit bounds to puestos (with padding)
-  const bounds = L.latLngBounds(stations.map(s => [Number(s.lat), Number(s.lng)]));
-  if (bounds.isValid()) {
-    mapState.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+  // Fit bounds to puestos (with padding) — only on first render to avoid
+  // jumping the user's view every time they toggle a filter.
+  if (!mapState._fitted) {
+    const bounds = L.latLngBounds(stations.map(s => [Number(s.lat), Number(s.lng)]));
+    if (bounds.isValid()) {
+      mapState.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+    }
+    mapState._fitted = true;
   }
 
-  hint.textContent = `${fmt(stations.length)} puesto${stations.length === 1 ? '' : 's'} con ubicación`;
+  // Legend & hint
+  if (candidateName) {
+    const total = values.reduce((a, b) => a + b, 0);
+    const stationsWith = values.filter(v => v > 0).length;
+    updateLegend({
+      kind: 'gradient',
+      title: headerLabel,
+      hint: `${fmt(total)} votos en ${fmt(stationsWith)} de ${fmt(stations.length)} puestos`,
+      progress: !mapEnrich.done ? '· cargando datos…' : '',
+    });
+  } else {
+    const top = (state.benchmark?.candidates || []).slice(0, 8);
+    updateLegend({
+      kind: 'swatches',
+      title: 'Color · candidato ganador',
+      hint: `${fmt(stations.length)} puesto${stations.length === 1 ? '' : 's'} con ubicación`,
+      swatches: top.map((c, i) => ({ color: ChartHelpers.color(i), label: c.name })),
+      otherLabel: state.benchmark?.candidates?.length > top.length ? 'Otros' : null,
+    });
+  }
+}
+
+/** Map a 0..1 ratio onto the same ramp as the heat gradient (used for marker fills). */
+function colorForRamp(t) {
+  const stops = Object.entries(HEAT_GRADIENT_INTENSITY)
+    .map(([k, v]) => [Number(k), v])
+    .sort((a, b) => a[0] - b[0]);
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+    if (t <= b) {
+      const r = (t - a) / Math.max(1e-9, b - a);
+      return mixHex(ca, cb, r);
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+function mixHex(a, b, t) {
+  const pa = parseHex(a), pb = parseHex(b);
+  const m = (x, y) => Math.round(x + (y - x) * t);
+  return `rgb(${m(pa[0], pb[0])}, ${m(pa[1], pb[1])}, ${m(pa[2], pb[2])})`;
+}
+function parseHex(h) {
+  const s = h.replace('#', '');
+  return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+}
+
+function updateLegend(spec) {
+  const title = $('#map-legend-title');
+  const bar = $('#map-legend-bar');
+  const scale = $('#map-legend-scale');
+  const swatches = $('#map-legend-swatches');
+  const hint = $('#map-legend-hint');
+
+  if (!title) return;
+  title.textContent = spec.title || '—';
+
+  if (spec.kind === 'gradient') {
+    bar.hidden = false;
+    scale.hidden = false;
+    swatches.hidden = true;
+    hint.textContent = `${spec.hint || ''} ${spec.progress || ''}`.trim();
+  } else if (spec.kind === 'swatches') {
+    bar.hidden = true;
+    scale.hidden = true;
+    swatches.hidden = false;
+    swatches.innerHTML = (spec.swatches || []).map(s => `
+      <div class="map-legend__sw">
+        <span class="map-legend__sw-dot" style="background:${s.color}"></span>
+        <span class="map-legend__sw-name" title="${escapeHtml(s.label)}">${escapeHtml(s.label)}</span>
+      </div>
+    `).join('') + (spec.otherLabel ? `
+      <div class="map-legend__sw">
+        <span class="map-legend__sw-dot" style="background:${PALETTE_OTHER}"></span>
+        <span class="map-legend__sw-name">${escapeHtml(spec.otherLabel)}</span>
+      </div>` : '');
+    hint.textContent = spec.hint || '';
+  } else {
+    bar.hidden = true;
+    scale.hidden = true;
+    swatches.hidden = true;
+    hint.textContent = spec.hint || '';
+  }
 }
 
 // ----------------------------------------------------------------
@@ -1443,6 +1735,16 @@ function wireEvents() {
       });
       renderMap();
     });
+  });
+
+  // Candidate filter (map view) — selecting a candidate switches the heatmap
+  // to per-candidate votes, lazy-loading station details if not yet cached.
+  $('#map-candidate-filter').addEventListener('change', async (e) => {
+    state.mapCandidate = e.target.value || '';
+    renderMap();
+    if (state.mapCandidate && !mapEnrich.done && !mapEnrich.loading) {
+      await ensureMapEnriched();   // renderMap will re-run when this finishes
+    }
   });
 
   // AI buttons

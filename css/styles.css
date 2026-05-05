@@ -1399,6 +1399,73 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   font-size: 11px;
 }
 
+/* Swatches legend (one row per top candidate) */
+.map-legend__swatches {
+  display: grid;
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.map-legend__sw {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.2;
+}
+.map-legend__sw-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}
+.map-legend__sw-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+/* Lazy-load progress (overlays the map while station details are fetched) */
+.map-progress {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--text-2);
+  z-index: 500;
+  box-shadow: var(--sh-md);
+  min-width: 260px;
+  backdrop-filter: blur(6px);
+}
+.map-progress__bar {
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.map-progress__fill {
+  height: 100%;
+  background: var(--brand);
+  width: 0%;
+  transition: width 200ms var(--ease);
+  border-radius: 999px;
+}
+.map-progress__text {
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+}
+
 /* Segmented toggle (used in map toolbar) */
 .seg {
   display: inline-flex;

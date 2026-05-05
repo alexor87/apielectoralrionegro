@@ -237,7 +237,13 @@
             <p class="view__sub">Distribución geográfica de los puestos. Haz clic en cualquier punto para ver el detalle.</p>
           </div>
           <div class="view__filters">
-            <div class="seg" role="tablist" aria-label="Modo del mapa">
+            <label class="select">
+              <span class="select__label">Candidato</span>
+              <select id="map-candidate-filter">
+                <option value="">Ganador por puesto</option>
+              </select>
+            </label>
+            <div class="seg" role="tablist" aria-label="Modo del mapa" id="map-mode-seg">
               <button type="button" class="seg__btn seg__btn--active" data-map-mode="votes">Por votos</button>
               <button type="button" class="seg__btn" data-map-mode="winner">Por % del ganador</button>
             </div>
@@ -246,13 +252,25 @@
 
         <div class="map-wrap">
           <div id="leaflet-map" class="leaflet-map" aria-label="Mapa de puestos de votación"></div>
+
+          <div class="map-progress" id="map-progress" hidden>
+            <div class="map-progress__bar"><div class="map-progress__fill" id="map-progress-fill"></div></div>
+            <div class="map-progress__text" id="map-progress-text">Cargando detalle por puesto…</div>
+          </div>
+
           <div class="map-legend" id="map-legend">
             <div class="map-legend__title" id="map-legend-title">Intensidad · votos</div>
-            <div class="map-legend__bar"></div>
-            <div class="map-legend__scale">
+
+            <!-- Gradient legend (mode: votes / winner / single candidate) -->
+            <div class="map-legend__bar" id="map-legend-bar"></div>
+            <div class="map-legend__scale" id="map-legend-scale">
               <span>Bajo</span>
               <span>Alto</span>
             </div>
+
+            <!-- Swatches legend (mode: ganador por puesto, colors by winner) -->
+            <div class="map-legend__swatches" id="map-legend-swatches" hidden></div>
+
             <div class="map-legend__hint" id="map-legend-hint">—</div>
           </div>
         </div>
