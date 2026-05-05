@@ -1602,3 +1602,57 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   transition: background var(--t-fast);
 }
 .map-popup__btn:hover { background: var(--brand-hover); }
+
+.map-popup__dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  flex-shrink: 0;
+}
+.map-popup__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+  margin-top: 4px;
+  line-height: 1.3;
+}
+.map-popup__row-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.map-popup__row-num {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Pie chart markers (SVG inside an L.divIcon) */
+.pie-marker-wrap {
+  background: transparent;
+  border: 0;
+}
+.pie-svg {
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+  transition: transform 120ms var(--ease);
+}
+.pie-marker-wrap:hover .pie-svg {
+  transform: scale(1.08);
+}
+.pie-empty {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ccc;
+  border: 1px solid #888;
+}

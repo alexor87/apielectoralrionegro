@@ -1126,42 +1126,101 @@ function renderMap() {
     }).addTo(mapState.map);
   }
 
-  // Markers — always colored by winner; size by selected metric.
+  // Markers
+  // ----------------------------------------------------------------
+  // Decide marker style:
+  //   • No candidate filter + enrichment done → SVG pie chart per puesto,
+  //     showing the share of votes per top candidate (colors = palette).
+  //   • Candidate selected, OR enrichment not yet done → simple circle
+  //     colored by winner (size scales with the active metric).
+  // ----------------------------------------------------------------
+  const usePies = !candidateName && mapEnrich.done && mapEnrich.byCandidate.size > 0;
+  const top8 = (state.benchmark?.candidates || []).slice(0, 8);
+
   for (const s of stations) {
     const winnerKey = normCandName(s.topCandidate?.name);
-    const fillColor = palette.get(winnerKey) || PALETTE_OTHER;
     const v = valueOf(s);
+    let m;
 
-    // Radius: in candidate mode, scale by that candidate's votes (zero = small);
-    // otherwise, scale by total votes (square-root for visual balance).
-    let radius;
-    if (candidateName) {
-      radius = v > 0 ? 5 + Math.round((v / maxV) * 7) : 4;   // 5..12, or 4 if no votes
+    if (usePies) {
+      // Build slices for top candidates + "Otros"
+      const slices = [];
+      let known = 0;
+      top8.forEach((c, i) => {
+        const key = normCandName(c.name);
+        const votes = mapEnrich.byCandidate.get(key)?.get(s.code) || 0;
+        if (votes > 0) {
+          slices.push({ color: ChartHelpers.color(i), value: votes, label: c.name });
+          known += votes;
+        }
+      });
+      const otros = Math.max(0, s.totalVotes - known);
+      if (otros > 0) {
+        slices.push({ color: PALETTE_OTHER, value: otros, label: 'Otros' });
+      }
+      const totalPie = known + otros;
+      const size = Math.max(20, Math.min(46, 16 + Math.round(Math.sqrt(s.totalVotes) / 5)));
+      const html = totalPie > 0
+        ? buildPieMarkerHtml(slices, totalPie, size)
+        : `<div class="pie-empty"></div>`;
+
+      const icon = L.divIcon({
+        className: 'pie-marker-wrap',
+        html,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      });
+      m = L.marker([Number(s.lat), Number(s.lng)], { icon, riseOnHover: true });
     } else {
-      radius = Math.max(5, Math.min(12, 4 + Math.round(Math.sqrt(s.totalVotes) / 18)));
+      // Circle fallback
+      const fillColor = palette.get(winnerKey) || PALETTE_OTHER;
+      let radius;
+      if (candidateName) {
+        radius = v > 0 ? 5 + Math.round((v / maxV) * 7) : 4;
+      } else {
+        radius = Math.max(5, Math.min(12, 4 + Math.round(Math.sqrt(s.totalVotes) / 18)));
+      }
+      const isInactive = candidateName && v <= 0;
+      m = L.circleMarker([Number(s.lat), Number(s.lng)], {
+        radius,
+        color: '#0a0a0a',
+        weight: isInactive ? 1 : 1.2,
+        fillColor,
+        fillOpacity: isInactive ? 0.35 : 0.92,
+        dashArray: isInactive ? '2,2' : null,
+      });
     }
 
-    const isInactive = candidateName && v <= 0;
-    const m = L.circleMarker([Number(s.lat), Number(s.lng)], {
-      radius,
-      color: '#0a0a0a',
-      weight: isInactive ? 1 : 1.2,
-      fillColor,
-      fillOpacity: isInactive ? 0.35 : 0.92,
-      dashArray: isInactive ? '2,2' : null,
-    });
-
     const w = s.topCandidate || {};
-    const candidateRow = candidateName
-      ? `<div class="map-popup__winner" style="margin-top:4px">
-           <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${v > 0 ? colorForRamp(v / maxV) : '#e5e5e3'};margin-right:6px;vertical-align:middle;border:1px solid rgba(0,0,0,0.18)"></span>
-           ${escapeHtml(candidateLabel)}: <strong>${fmt(v)}</strong> votos
-         </div>`
-      : (w.name && w.name !== '—' ? `
+    let bodyRows = '';
+
+    if (candidateName) {
+      bodyRows = `
+        <div class="map-popup__winner" style="margin-top:4px">
+          <span class="map-popup__dot" style="background:${v > 0 ? colorForRamp(v / maxV) : '#e5e5e3'}"></span>
+          ${escapeHtml(candidateLabel)}: <strong>${fmt(v)}</strong> votos
+        </div>`;
+    } else if (usePies) {
+      // Mini distribution list inside popup
+      const top5 = top8.slice(0, 5).map((c, i) => {
+        const key = normCandName(c.name);
+        const votes = mapEnrich.byCandidate.get(key)?.get(s.code) || 0;
+        const pct = s.totalVotes ? (votes / s.totalVotes) * 100 : 0;
+        return { color: ChartHelpers.color(i), name: c.name, votes, pct };
+      }).filter(x => x.votes > 0).sort((a, b) => b.votes - a.votes);
+      bodyRows = top5.map(c => `
+        <div class="map-popup__row">
+          <span class="map-popup__dot" style="background:${c.color}"></span>
+          <span class="map-popup__row-name">${escapeHtml(c.name)}</span>
+          <span class="map-popup__row-num">${fmt(c.votes)} · ${fmtPct(c.pct)}</span>
+        </div>`).join('');
+    } else if (w.name && w.name !== '—') {
+      bodyRows = `
         <div class="map-popup__winner">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${fillColor};margin-right:6px;vertical-align:middle;border:1px solid rgba(0,0,0,0.18)"></span>
+          <span class="map-popup__dot" style="background:${palette.get(winnerKey) || PALETTE_OTHER}"></span>
           Ganador: <strong>${escapeHtml(w.name)}</strong> · ${fmtPct(w.pct)}
-        </div>` : '');
+        </div>`;
+    }
 
     m.bindPopup(`
       <div class="map-popup">
@@ -1170,7 +1229,7 @@ function renderMap() {
         <div class="map-popup__stat">
           <strong>${fmt(s.totalVotes)}</strong> votos · ${fmt(s.mesaCount)} mesas
         </div>
-        ${candidateRow}
+        ${bodyRows}
         <button type="button" class="map-popup__btn" data-open-station="${escapeHtml(s.code)}">
           Ver detalle
         </button>
@@ -1214,6 +1273,44 @@ function renderMap() {
       otherLabel: state.benchmark?.candidates?.length > top.length ? 'Otros' : null,
     });
   }
+}
+
+/**
+ * Build the SVG pie chart used as the marker icon for each puesto when
+ * showing the global view (no candidate filter). Slices are drawn clockwise
+ * from 12-o'clock. A single-slice puesto is rendered as a full filled circle.
+ */
+function buildPieMarkerHtml(slices, total, size) {
+  const r = size / 2;
+  const cx = r, cy = r;
+  const stroke = 'rgba(0, 0, 0, 0.45)';
+
+  if (slices.length === 1) {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="pie-svg">
+      <circle cx="${cx}" cy="${cy}" r="${r - 0.5}" fill="${slices[0].color}" stroke="${stroke}" stroke-width="0.8"/>
+    </svg>`;
+  }
+
+  let angle = -90;
+  let paths = '';
+  for (const sl of slices) {
+    if (sl.value <= 0) continue;
+    const frac = sl.value / total;
+    const a2 = angle + frac * 360;
+    const a1Rad = angle * Math.PI / 180;
+    const a2Rad = a2 * Math.PI / 180;
+    const x1 = cx + (r - 0.5) * Math.cos(a1Rad);
+    const y1 = cy + (r - 0.5) * Math.sin(a1Rad);
+    const x2 = cx + (r - 0.5) * Math.cos(a2Rad);
+    const y2 = cy + (r - 0.5) * Math.sin(a2Rad);
+    const large = frac > 0.5 ? 1 : 0;
+    paths += `<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${(r - 0.5).toFixed(2)},${(r - 0.5).toFixed(2)} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${sl.color}"/>`;
+    angle = a2;
+  }
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="pie-svg">
+    ${paths}
+    <circle cx="${cx}" cy="${cy}" r="${r - 0.5}" fill="none" stroke="${stroke}" stroke-width="0.8"/>
+  </svg>`;
 }
 
 /** Map a 0..1 ratio onto the same ramp as the heat gradient (used for marker fills). */
@@ -1334,14 +1431,29 @@ async function openCandidateDetail(candidate) {
   const norm = s => String(s || '').trim().toUpperCase();
   const targetCode = candidate.code || null;
   const targetName = norm(candidate.name);
+  const targetPartyCode = candidate.partyCode || null;
+  const targetParty = norm(candidate.party);
 
-  // Match a mesa-candidate row to our target. Code-match first (Alcaldía-style
-  // responses), name-match fallback (Concejo /station omits codes).
+  // Match a mesa-candidate to our target. When both sides have candidate_code
+  // (Alcaldía-style responses) the code is authoritative. Otherwise — Concejo
+  // /station omits codes — fall back to name + party, so two candidates with
+  // the same name from different parties don't get summed together.
   const matches = (mesaCand) => {
     const code = pick(mesaCand, 'candidate_code');
-    if (targetCode && code && String(code) === String(targetCode)) return true;
+    if (targetCode && code) {
+      return String(code) === String(targetCode);
+    }
     const name = norm(pick(mesaCand, 'candidate_name', 'name'));
-    return name === targetName;
+    if (name !== targetName) return false;
+    const mesaPartyCode = pick(mesaCand, 'party_code');
+    if (targetPartyCode && mesaPartyCode) {
+      return String(mesaPartyCode) === String(targetPartyCode);
+    }
+    const mesaParty = norm(pick(mesaCand, 'party_name', 'party'));
+    if (targetParty && mesaParty) {
+      return mesaParty === targetParty;
+    }
+    return true;
   };
 
   const rows = [];
@@ -1381,7 +1493,6 @@ async function openCandidateDetail(candidate) {
   }
 
   // Aggregates
-  const sumVotes      = rows.reduce((s, r) => s + r.votes, 0);
   const mesasWithVotes = rows.filter(r => r.votes > 0).length;
   const totalMesas    = rows.length;
   const top           = rows[0];
@@ -1390,8 +1501,8 @@ async function openCandidateDetail(candidate) {
   $('#candidate-modal-body').innerHTML = `
     <div class="station-detail__metrics">
       <div class="station-detail__metric">
-        <span class="station-detail__metric-label">Votos sumados</span>
-        <span class="station-detail__metric-value">${fmt(sumVotes)}</span>
+        <span class="station-detail__metric-label">Votos totales</span>
+        <span class="station-detail__metric-value">${fmt(candidate.votes)}</span>
       </div>
       <div class="station-detail__metric">
         <span class="station-detail__metric-label">Mesas con votos</span>
@@ -1403,14 +1514,6 @@ async function openCandidateDetail(candidate) {
         <span style="font-size:11px;color:var(--text-4);margin-top:2px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(top.stationName)} · Mesa ${escapeHtml(String(top.mesa))}">Mesa ${escapeHtml(String(top.mesa))} · ${escapeHtml(top.stationName)}</span>
       </div>
     </div>
-
-    ${sumVotes !== candidate.votes ? `
-      <div class="alert" style="background:var(--info-50);color:var(--info);border:1px solid #dbeafe;font-size:12px;margin-bottom:var(--s-4)">
-        La suma por mesa (${fmt(sumVotes)}) difiere del total del cargo (${fmt(candidate.votes)}).
-        ${candidate._partial
-          ? 'Este es un candidato suplementado: la API no expuso todos sus puestos.'
-          : 'Algunas mesas pueden no haberlo incluido en su top 10 local.'}
-      </div>` : ''}
 
     <h4 class="station-detail__h3">Votos por mesa · ordenado de mayor a menor</h4>
     <div class="mesa-table-wrap">
