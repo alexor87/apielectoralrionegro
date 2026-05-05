@@ -758,26 +758,31 @@ function renderStations() {
 
   $('#station-grid').innerHTML = stations.map(s => {
     const w = s.topCandidate;
+    const fillW = Math.max(0, Math.min(100, Number(w.pct) || 0));
+    const winnerName = w.name && w.name !== '—' ? titleCase(w.name) : '—';
+    const winnerParty = w.party && w.party !== '—' ? titleCase(w.party) : '';
+    const stationName = titleCase(s.name);
+    const zoneLabel = s.zone ? titleCase(s.zone) : '';
     return `
       <button class="station-card" data-station="${escapeHtml(s.code)}" type="button">
-        <div class="station-card__head">
-          <h3 class="station-card__name">${escapeHtml(s.name)}</h3>
-          ${s.zone ? `<span class="station-card__zone">${escapeHtml(s.zone)}</span>` : ''}
-        </div>
+        <header class="station-card__head">
+          <h3 class="station-card__name" title="${escapeHtml(stationName)}">${escapeHtml(stationName)}</h3>
+          ${zoneLabel ? `<span class="station-card__zone" title="${escapeHtml(zoneLabel)}">${escapeHtml(zoneLabel)}</span>` : ''}
+        </header>
         <div class="station-card__mini">
           <div class="station-mini-bar">
-            <span class="station-mini-bar__name">${escapeHtml(w.name)}</span>
+            <span class="station-mini-bar__name" title="${escapeHtml(winnerName)}">${escapeHtml(winnerName)}</span>
             <span class="station-mini-bar__pct">${fmtPct(w.pct)}</span>
             <div class="station-mini-bar__bar">
-              <div class="station-mini-bar__fill" style="width:${Math.min(100, w.pct)}%; background:${ChartHelpers.color(0)}"></div>
+              <div class="station-mini-bar__fill" style="width:${fillW}%; background:${ChartHelpers.color(0)}"></div>
             </div>
           </div>
-          <div class="station-card__party">${escapeHtml(w.party)}</div>
+          ${winnerParty ? `<div class="station-card__party" title="${escapeHtml(winnerParty)}">${escapeHtml(winnerParty)}</div>` : ''}
         </div>
-        <div class="station-card__foot">
+        <footer class="station-card__foot">
           <span class="station-card__total-label">${fmt(s.mesaCount)} mesas</span>
-          <span class="station-card__total">${fmt(s.totalVotes)}</span>
-        </div>
+          <span class="station-card__total">${fmt(s.totalVotes)} <span style="font-weight:400;color:var(--text-3);font-size:11px">votos</span></span>
+        </footer>
       </button>
     `;
   }).join('') || emptyState('No hay puestos que coincidan con la búsqueda.');
