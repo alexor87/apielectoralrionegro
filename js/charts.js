@@ -5,16 +5,16 @@
 
 const ChartHelpers = (() => {
   const PALETTE = [
-    '#1d9e75', // green principal
-    '#185fa5', // azul acento
-    '#6e4f9f', // morado neutro
-    '#b86b3a', // ámbar
-    '#2c8189', // teal
-    '#8a7a2a', // mostaza
-    '#6a4f6f', // ciruela
-    '#466d2e', // verde oscuro
-    '#a14f5f', // borgoña
-    '#5c6f8a', // azul gris
+    '#059669', // emerald
+    '#2563eb', // blue
+    '#7c3aed', // violet
+    '#ea580c', // orange
+    '#0891b2', // cyan
+    '#db2777', // pink
+    '#65a30d', // lime
+    '#9333ea', // purple
+    '#c2410c', // rust
+    '#0d9488', // teal
   ];
 
   /** Get a stable color from the palette by index. */
