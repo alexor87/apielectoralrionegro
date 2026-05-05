@@ -18,7 +18,15 @@ const state = {
   view: 'summary',
   partyFilter: '',
   stationSearch: '',
+  mapMode: 'votes',     // 'votes' | 'winner'
   loading: false,
+};
+
+// Leaflet handles (lazy-initialized on first map render)
+const mapState = {
+  map: null,
+  heatLayer: null,
+  markersLayer: null,
 };
 
 // ----------------------------------------------------------------
@@ -419,6 +427,7 @@ function renderAll() {
     case 'candidates': renderCandidates(); $('#view-candidates').hidden = false; break;
     case 'parties':    renderParties(); $('#view-parties').hidden = false; break;
     case 'stations':   renderStations(); $('#view-stations').hidden = false; break;
+    case 'map':        $('#view-map').hidden = false; renderMap(); break;
   }
 }
 
@@ -622,6 +631,136 @@ function renderStations() {
   $$('.station-card').forEach(btn => {
     btn.addEventListener('click', () => openStationDetail(btn.dataset.station));
   });
+}
+
+// ----------------------------------------------------------------
+// View 5 · Map (Leaflet heatmap)
+// ----------------------------------------------------------------
+// Default view = Rionegro municipal seat. Used as fallback if no station has coords.
+const MAP_DEFAULT_CENTER = [6.155, -75.374];
+const MAP_DEFAULT_ZOOM   = 13;
+
+function getMappableStations() {
+  const list = state.mapData?.stations || [];
+  return list.filter(s => Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)));
+}
+
+function renderMap() {
+  // Leaflet may not be loaded yet (deferred CDN). Retry shortly.
+  if (typeof L === 'undefined' || typeof L.heatLayer !== 'function') {
+    setTimeout(renderMap, 80);
+    return;
+  }
+
+  const container = $('#leaflet-map');
+  if (!container) return;
+
+  // Init once
+  if (!mapState.map) {
+    mapState.map = L.map(container, {
+      center: MAP_DEFAULT_CENTER,
+      zoom: MAP_DEFAULT_ZOOM,
+      scrollWheelZoom: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(mapState.map);
+    mapState.markersLayer = L.layerGroup().addTo(mapState.map);
+
+    // Delegated click for "Ver detalle" buttons inside Leaflet popups
+    container.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-open-station]');
+      if (!btn) return;
+      mapState.map.closePopup();
+      openStationDetail(btn.dataset.openStation);
+    });
+  } else {
+    // Container size may have changed while hidden — recompute layout.
+    setTimeout(() => mapState.map.invalidateSize(), 50);
+  }
+
+  const stations = getMappableStations();
+  const hint = $('#map-legend-hint');
+  $('#map-legend-title').textContent =
+    state.mapMode === 'winner' ? 'Intensidad · % del ganador' : 'Intensidad · votos totales';
+
+  // Wipe previous heat + markers
+  if (mapState.heatLayer) {
+    mapState.map.removeLayer(mapState.heatLayer);
+    mapState.heatLayer = null;
+  }
+  mapState.markersLayer.clearLayers();
+
+  if (stations.length === 0) {
+    hint.textContent = 'Esta elección no incluye coordenadas geográficas para los puestos.';
+    return;
+  }
+
+  // Build heat data: [lat, lng, intensity 0..1]
+  const valueOf = state.mapMode === 'winner'
+    ? (s) => Number(s.topCandidate?.pct) || 0
+    : (s) => Number(s.totalVotes) || 0;
+
+  const values = stations.map(valueOf);
+  const maxV = Math.max(...values, 1);
+
+  const heatPoints = stations.map(s => [
+    Number(s.lat),
+    Number(s.lng),
+    Math.max(0.05, valueOf(s) / maxV),  // floor so even small puestos show
+  ]);
+
+  mapState.heatLayer = L.heatLayer(heatPoints, {
+    radius: 28,
+    blur: 22,
+    minOpacity: 0.35,
+    maxZoom: 17,
+    gradient: {
+      0.0: '#1e3a8a',  // deep blue
+      0.3: '#0891b2',  // cyan
+      0.55: '#65a30d', // lime
+      0.75: '#f59e0b', // amber
+      1.0: '#dc2626',  // red — hottest
+    },
+  }).addTo(mapState.map);
+
+  // Lightweight clickable markers per station
+  for (const s of stations) {
+    const m = L.circleMarker([Number(s.lat), Number(s.lng)], {
+      radius: 5,
+      color: '#0a0a0a',
+      weight: 1,
+      fillColor: '#ffffff',
+      fillOpacity: 0.85,
+    });
+    const w = s.topCandidate || {};
+    m.bindPopup(`
+      <div class="map-popup">
+        <div class="map-popup__name">${escapeHtml(s.name)}</div>
+        ${s.zone ? `<div class="map-popup__zone">${escapeHtml(s.zone)}</div>` : ''}
+        <div class="map-popup__stat">
+          <strong>${fmt(s.totalVotes)}</strong> votos · ${fmt(s.mesaCount)} mesas
+        </div>
+        ${w.name && w.name !== '—' ? `
+          <div class="map-popup__winner">
+            Ganador: <strong>${escapeHtml(w.name)}</strong> · ${fmtPct(w.pct)}
+          </div>` : ''}
+        <button type="button" class="map-popup__btn" data-open-station="${escapeHtml(s.code)}">
+          Ver detalle
+        </button>
+      </div>
+    `);
+    m.addTo(mapState.markersLayer);
+  }
+
+  // Fit bounds to puestos (with padding)
+  const bounds = L.latLngBounds(stations.map(s => [Number(s.lat), Number(s.lng)]));
+  if (bounds.isValid()) {
+    mapState.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+  }
+
+  hint.textContent = `${fmt(stations.length)} puesto${stations.length === 1 ? '' : 's'} con ubicación`;
 }
 
 // ----------------------------------------------------------------
@@ -1154,6 +1293,19 @@ function wireEvents() {
   $('#station-search').addEventListener('input', (e) => {
     state.stationSearch = e.target.value;
     renderStations();
+  });
+
+  // Map mode toggle (votos / % ganador)
+  $$('[data-map-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mapMode;
+      if (mode === state.mapMode) return;
+      state.mapMode = mode;
+      $$('[data-map-mode]').forEach(b => {
+        b.classList.toggle('seg__btn--active', b.dataset.mapMode === mode);
+      });
+      renderMap();
+    });
   });
 
   // AI buttons

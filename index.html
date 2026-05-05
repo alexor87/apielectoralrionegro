@@ -10,10 +10,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <link rel="stylesheet" href="css/styles.css" />
 
   <script src="js/config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" defer></script>
 </head>
 <body>
   <!-- Setup screen: shown when no API key is configured -->
@@ -98,6 +103,7 @@
       <button class="tab" data-view="candidates" role="tab" aria-selected="false">Candidatos</button>
       <button class="tab" data-view="parties" role="tab" aria-selected="false">Partidos</button>
       <button class="tab" data-view="stations" role="tab" aria-selected="false">Puestos</button>
+      <button class="tab" data-view="map" role="tab" aria-selected="false">Mapa</button>
     </nav>
 
     <section id="content" class="content">
@@ -221,6 +227,35 @@
           </div>
         </header>
         <div class="station-grid" id="station-grid"></div>
+      </article>
+
+      <!-- View: Map (heatmap) -->
+      <article id="view-map" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Mapa de calor</h2>
+            <p class="view__sub">Distribución geográfica de los puestos. Haz clic en cualquier punto para ver el detalle.</p>
+          </div>
+          <div class="view__filters">
+            <div class="seg" role="tablist" aria-label="Modo del mapa">
+              <button type="button" class="seg__btn seg__btn--active" data-map-mode="votes">Por votos</button>
+              <button type="button" class="seg__btn" data-map-mode="winner">Por % del ganador</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="map-wrap">
+          <div id="leaflet-map" class="leaflet-map" aria-label="Mapa de puestos de votación"></div>
+          <div class="map-legend" id="map-legend">
+            <div class="map-legend__title" id="map-legend-title">Intensidad · votos</div>
+            <div class="map-legend__bar"></div>
+            <div class="map-legend__scale">
+              <span>Bajo</span>
+              <span>Alto</span>
+            </div>
+            <div class="map-legend__hint" id="map-legend-hint">—</div>
+          </div>
+        </div>
       </article>
     </section>
   </main>
