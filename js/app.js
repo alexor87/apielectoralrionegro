@@ -544,12 +544,24 @@ function normalizeMap(payload) {
 
   const stations = stationsRaw.map(s => {
     const totalVotes = Number(pick(s, 'total_votes', 'valid_votes', 'votes')) || 0;
-    const topVotes   = Number(pick(s, 'top_candidate_votes', 'top_votes')) || 0;
-    const topName    = pick(s, 'top_candidate_name', 'top_candidate') || '—';
-    const topParty   = pick(s, 'top_party_name', 'top_party') || '—';
-    const topPct     = totalVotes ? (topVotes / totalVotes) * 100 : 0;
+    let topVotes     = Number(pick(s, 'top_candidate_votes', 'top_votes')) || 0;
+    let topName      = pick(s, 'top_candidate_name', 'top_candidate') || '—';
+    let topParty     = pick(s, 'top_party_name', 'top_party') || '—';
     const code       = String(pick(s, 'polling_station_code', 'station_code', 'code', 'id') ?? '');
     const zone       = pick(s, 'commune', 'zone', 'comuna', 'district') || '';
+
+    // The /map endpoint sometimes reports VOTOS EN BLANCO / NULOS as the
+    // "top candidate" (common in Concejo, where blanks accumulate more than
+    // any single fragmented candidate). Don't surface that as the puesto's
+    // winner — leave the slot empty, the enrichment step will recompute it
+    // from real per-candidate breakdowns.
+    const topPartyCode = pick(s, 'top_party_code');
+    if (isInvalidVotePseudo({ name: topName, party_code: topPartyCode })) {
+      topName  = '—';
+      topParty = '—';
+      topVotes = 0;
+    }
+    const topPct = totalVotes ? (topVotes / totalVotes) * 100 : 0;
 
     const coords = resolveStationCoords(pick(s, 'lat'), pick(s, 'lng'), code, zone);
 
@@ -976,9 +988,50 @@ async function ensureMapEnriched() {
   mapEnrich.done = true;
   hideMapProgress();
 
+  // Recompute each puesto's top candidate from real per-candidate breakdowns
+  // (excludes pseudo entries like VOTOS EN BLANCO, which can dominate the
+  // /map endpoint's `top_candidate` field for fragmented races like Concejo).
+  recomputeStationWinners();
+
   // If the user is on the map view, repaint to reflect the new filter options
   // and the (possibly) candidate-specific heatmap they already selected.
   if (state.view === 'map') renderMap();
+}
+
+/**
+ * Walk every mapped station and pick the highest-vote real candidate (from
+ * the enriched cache) as its top candidate. Used to correct the case where
+ * /map flagged blanco/nulos as the winner.
+ */
+function recomputeStationWinners() {
+  const stations = state.mapData?.stations || [];
+  if (stations.length === 0 || mapEnrich.byCandidate.size === 0) return;
+
+  const benchByKey = new Map();
+  for (const c of (state.benchmark?.candidates || [])) {
+    benchByKey.set(normCandName(c.name), c);
+  }
+
+  for (const s of stations) {
+    let bestVotes = -1;
+    let bestKey = null;
+    for (const [key, perStation] of mapEnrich.byCandidate) {
+      const v = perStation.get(s.code) || 0;
+      if (v > bestVotes) {
+        bestVotes = v;
+        bestKey = key;
+      }
+    }
+    if (bestKey != null && bestVotes > 0) {
+      const cand = benchByKey.get(bestKey);
+      s.topCandidate = {
+        name:  cand?.name  || bestKey,
+        party: cand?.party || '—',
+        votes: bestVotes,
+        pct:   s.totalVotes ? (bestVotes / s.totalVotes) * 100 : 0,
+      };
+    }
+  }
 }
 
 function showMapProgress(done, total) {
