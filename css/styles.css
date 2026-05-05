@@ -733,9 +733,39 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   align-items: center;
   border-top: 1px solid var(--border-soft);
   transition: background var(--t-fast);
+  /* Reset native button styles so it looks like the previous div */
+  width: 100%;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
 }
 .candidate-row:first-child { border-top: 0; }
 .candidate-row:hover { background: var(--surface-2); }
+.candidate-row:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.candidate-row::after {
+  content: '›';
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-4);
+  font-size: 18px;
+  opacity: 0;
+  transition: opacity var(--t-fast), transform var(--t-fast);
+}
+.candidate-row:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(2px);
+}
 
 .candidate-row__rank {
   font-variant-numeric: tabular-nums;

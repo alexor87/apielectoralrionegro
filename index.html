@@ -278,6 +278,26 @@
     </section>
   </main>
 
+  <!-- Candidate detail modal · per-mesa breakdown -->
+  <div id="candidate-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="candidate-modal-title">
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__panel modal__panel--wide">
+      <header class="modal__head">
+        <div>
+          <span class="badge badge--green" id="candidate-modal-tag">Candidato</span>
+          <h2 class="modal__title" id="candidate-modal-title">—</h2>
+          <p class="modal__sub" id="candidate-modal-sub">—</p>
+        </div>
+        <button class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+      </header>
+      <div class="modal__body" id="candidate-modal-body">
+        <div class="loading"><div class="loading__bar"></div><span class="loading__text">Cargando votos por mesa...</span></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Station detail modal -->
   <div id="station-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="station-modal-title">
     <div class="modal__backdrop" data-close></div>

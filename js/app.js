@@ -687,16 +687,16 @@ function renderCandidates() {
   $('#candidate-list').innerHTML = list.map((c, i) => {
     const isPartial = c._partial;
     return `
-      <div class="candidate-row${isPartial ? ' candidate-row--partial' : ''}">
+      <button type="button" class="candidate-row${isPartial ? ' candidate-row--partial' : ''}" data-candidate-idx="${i}" title="Ver votos por mesa">
         <span class="candidate-row__rank">${i + 1}</span>
         <div class="candidate-row__name">
           <span class="candidate-row__color" style="background:${ChartHelpers.color(i)}"></span>
           <div class="candidate-row__text">
             <span class="candidate-row__person">
-              ${escapeHtml(c.name)}
+              ${escapeHtml(titleCase(c.name))}
               ${isPartial ? '<span class="candidate-row__flag" title="Datos parciales: este candidato no estaba en el top 30 de la API. Su total se construyó sumando puestos donde apareció.">parcial</span>' : ''}
             </span>
-            <span class="candidate-row__party">${escapeHtml(c.party)}${c.list ? ' · Lista ' + escapeHtml(String(c.list)) : ''}</span>
+            <span class="candidate-row__party">${escapeHtml(titleCase(c.party))}${c.list ? ' · Lista ' + escapeHtml(String(c.list)) : ''}</span>
           </div>
         </div>
         <div class="candidate-row__bar">
@@ -706,8 +706,18 @@ function renderCandidates() {
           <span class="candidate-row__votes">${fmt(c.votes)}${isPartial ? '+' : ''}</span>
           <span class="candidate-row__pct">${fmtPct(c.pct)}</span>
         </div>
-      </div>`;
+      </button>`;
   }).join('') || emptyState('No hay candidatos para mostrar.');
+
+  // Wire candidate click → open per-mesa detail modal.
+  // Attach against the active filtered list to get the right index → candidate.
+  $$('#candidate-list .candidate-row').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.candidateIdx);
+      const cand = list[idx];
+      if (cand) openCandidateDetail(cand);
+    });
+  });
 }
 
 // ----------------------------------------------------------------
@@ -1197,6 +1207,177 @@ function updateLegend(spec) {
     swatches.hidden = true;
     hint.textContent = spec.hint || '';
   }
+}
+
+// ----------------------------------------------------------------
+// Candidate detail modal · per-mesa votes
+// ----------------------------------------------------------------
+
+/**
+ * Open the per-mesa breakdown for a single candidate.
+ * Fetches /station for every polling station in parallel (results are cached
+ * by api.js, so revisiting is instant), then extracts this candidate's votes
+ * from each mesa's `candidates[]` array. Table is sorted desc by votes.
+ */
+async function openCandidateDetail(candidate) {
+  const modal = $('#candidate-modal');
+  modal.hidden = false;
+
+  // Header
+  const niceName = titleCase(candidate.name);
+  const niceParty = candidate.party ? titleCase(candidate.party) : '';
+  $('#candidate-modal-title').textContent = niceName;
+  $('#candidate-modal-sub').textContent =
+    `${niceParty}${niceParty ? ' · ' : ''}${fmt(candidate.votes)} votos · ${fmtPct(candidate.pct)} del cargo`;
+  $('#candidate-modal-tag').textContent = `Candidato${candidate._partial ? ' · datos parciales' : ''}`;
+
+  $('#candidate-modal-body').innerHTML = `
+    <div class="loading">
+      <div class="loading__bar"></div>
+      <span class="loading__text">Cargando votos por mesa de ${escapeHtml(niceName)}...</span>
+    </div>`;
+
+  // Fetch all stations in parallel (cached by api.js).
+  const stations = state.mapData?.stations || [];
+  if (stations.length === 0) {
+    $('#candidate-modal-body').innerHTML = emptyState('No hay datos de puestos disponibles.');
+    return;
+  }
+
+  let responses;
+  try {
+    responses = await Promise.all(
+      stations.map(s =>
+        ElectoralAPI.getStation(state.electionId, state.corporationCode, s.code)
+          .then(r => ({ station: s, data: r }))
+          .catch(() => ({ station: s, data: null }))
+      )
+    );
+  } catch (err) {
+    $('#candidate-modal-body').innerHTML = `
+      <div class="alert alert--error">${escapeHtml(err.message || 'Error cargando los puestos.')}</div>`;
+    return;
+  }
+
+  // Build per-mesa entries for this candidate.
+  const norm = s => String(s || '').trim().toUpperCase();
+  const targetCode = candidate.code || null;
+  const targetName = norm(candidate.name);
+
+  // Match a mesa-candidate row to our target. Code-match first (Alcaldía-style
+  // responses), name-match fallback (Concejo /station omits codes).
+  const matches = (mesaCand) => {
+    const code = pick(mesaCand, 'candidate_code');
+    if (targetCode && code && String(code) === String(targetCode)) return true;
+    const name = norm(pick(mesaCand, 'candidate_name', 'name'));
+    return name === targetName;
+  };
+
+  const rows = [];
+  for (const { station, data } of responses) {
+    if (!data) continue;
+    const byMesa = toArray(data, 'by_mesa', 'mesas', 'tables');
+    for (const m of byMesa) {
+      const cands = toArray(m, 'candidates');
+      let votes = 0, found = false;
+      for (const c of cands) {
+        if (matches(c)) {
+          votes = Number(pick(c, 'votes', 'total_votes')) || 0;
+          found = true;
+          break;
+        }
+      }
+      const total = Number(pick(m, 'total_votes', 'valid_votes', 'votes')) || 0;
+      rows.push({
+        stationCode: station.code,
+        stationName: titleCase(station.name),
+        zone: station.zone ? titleCase(station.zone) : '',
+        mesa: pick(m, 'mesa', 'number', 'table_number', 'id') ?? '—',
+        votes,
+        total,
+        pct: total ? (votes / total) * 100 : 0,
+        found,
+      });
+    }
+  }
+
+  // Sort desc by votes (the explicit user request).
+  rows.sort((a, b) => b.votes - a.votes);
+
+  if (rows.length === 0) {
+    $('#candidate-modal-body').innerHTML = emptyState('No se encontraron mesas con este candidato.');
+    return;
+  }
+
+  // Aggregates
+  const sumVotes      = rows.reduce((s, r) => s + r.votes, 0);
+  const mesasWithVotes = rows.filter(r => r.votes > 0).length;
+  const totalMesas    = rows.length;
+  const top           = rows[0];
+  const maxV          = Math.max(top.votes, 1);
+
+  $('#candidate-modal-body').innerHTML = `
+    <div class="station-detail__metrics">
+      <div class="station-detail__metric">
+        <span class="station-detail__metric-label">Votos sumados</span>
+        <span class="station-detail__metric-value">${fmt(sumVotes)}</span>
+      </div>
+      <div class="station-detail__metric">
+        <span class="station-detail__metric-label">Mesas con votos</span>
+        <span class="station-detail__metric-value">${fmt(mesasWithVotes)}<span style="font-size:13px;color:var(--text-3);font-weight:400"> / ${fmt(totalMesas)}</span></span>
+      </div>
+      <div class="station-detail__metric">
+        <span class="station-detail__metric-label">Mejor mesa</span>
+        <span class="station-detail__metric-value" style="font-size:18px">${fmt(top.votes)}<span style="font-size:11px;color:var(--text-3);font-weight:400"> votos</span></span>
+        <span style="font-size:11px;color:var(--text-4);margin-top:2px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(top.stationName)} · Mesa ${escapeHtml(String(top.mesa))}">Mesa ${escapeHtml(String(top.mesa))} · ${escapeHtml(top.stationName)}</span>
+      </div>
+    </div>
+
+    ${sumVotes !== candidate.votes ? `
+      <div class="alert" style="background:var(--info-50);color:var(--info);border:1px solid #dbeafe;font-size:12px;margin-bottom:var(--s-4)">
+        La suma por mesa (${fmt(sumVotes)}) difiere del total del cargo (${fmt(candidate.votes)}).
+        ${candidate._partial
+          ? 'Este es un candidato suplementado: la API no expuso todos sus puestos.'
+          : 'Algunas mesas pueden no haberlo incluido en su top 10 local.'}
+      </div>` : ''}
+
+    <h4 class="station-detail__h3">Votos por mesa · ordenado de mayor a menor</h4>
+    <div class="mesa-table-wrap">
+      <table class="tables-table mesa-table">
+        <thead>
+          <tr>
+            <th class="mesa-row__num">#</th>
+            <th>Puesto</th>
+            <th>Mesa</th>
+            <th>Votos</th>
+            <th class="mesa-row__sub">% en mesa</th>
+            <th class="mesa-row__sub">Total mesa</th>
+            <th style="min-width:120px">Distribución</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => `
+            <tr${r.votes === 0 ? ' style="opacity:0.55"' : ''}>
+              <td class="mesa-row__num">${i + 1}</td>
+              <td style="text-align:left">
+                <div style="font-weight:500">${escapeHtml(r.stationName)}</div>
+                ${r.zone ? `<div style="font-size:11px;color:var(--text-4)">${escapeHtml(r.zone)}</div>` : ''}
+              </td>
+              <td>Mesa ${escapeHtml(String(r.mesa))}</td>
+              <td><strong>${fmt(r.votes)}</strong></td>
+              <td class="mesa-row__sub">${fmtPct(r.pct)}</td>
+              <td class="mesa-row__sub">${fmt(r.total)}</td>
+              <td style="text-align:left">
+                <div style="height:6px;background:var(--surface-3);border-radius:999px;overflow:hidden;width:100%">
+                  <div style="height:100%;width:${Math.max(0, Math.min(100, (r.votes / maxV) * 100))}%;background:${ChartHelpers.color(0)};border-radius:999px;transition:width 0.4s"></div>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 // ----------------------------------------------------------------
