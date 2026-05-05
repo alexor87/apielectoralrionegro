@@ -262,6 +262,14 @@ async function loadElectionData() {
 
     $('#ai-global-btn').disabled = false;
     renderAll();
+
+    // If /benchmark looks capped (>= 27 real candidates), kick off a background
+    // enrichment that unions per-station candidate data to surface candidates
+    // beyond the API top-30 cap. This helps for Concejo / Asamblea / JAL where
+    // the real candidate count is higher than the cap.
+    if (state.benchmark.candidates.length >= 27 && state.mapData?.stations?.length > 0) {
+      enrichCandidatesFromStations(state.electionId, state.corporationCode);
+    }
   } catch (err) {
     if (err.code === 'AUTH') {
       ElectoralAPI.clearKey();
@@ -271,6 +279,113 @@ async function loadElectionData() {
     showError(err.message);
   } finally {
     setLoading(false);
+  }
+}
+
+/**
+ * Background enrichment: when /benchmark hits its top-30 cap, fetch all
+ * /station endpoints in parallel and union the candidates seen across the
+ * 11 stations. Each /station returns its own top candidates (~10 per puesto).
+ * For real candidates (party_code != "00000"), we sum their votes across all
+ * stations where they appear and merge into the global candidate list.
+ *
+ * Caveats this leaves visible to the user:
+ *   - For supplemental candidates (not in /benchmark), the vote total is a
+ *     LOWER BOUND — only counts stations where they made the local top 10.
+ *   - We mark these candidates with `_partial: true` so the UI can flag them.
+ */
+async function enrichCandidatesFromStations(electionId, corporationCode) {
+  const stations = state.mapData?.stations || [];
+  if (stations.length === 0) return;
+
+  // Show a hint while loading
+  state.benchmark._enriching = true;
+  if (state.view === 'candidates') renderCandidates();
+
+  try {
+    const results = await Promise.all(
+      stations.map(s =>
+        ElectoralAPI.getStation(electionId, corporationCode, s.code)
+          .catch(() => null)
+      )
+    );
+
+    // Guard: user could have switched cargo during the wait.
+    if (state.electionId !== electionId || state.corporationCode !== corporationCode) {
+      return;
+    }
+
+    // Build a lookup of known candidates by normalized (name|party) key.
+    const norm = (s) => String(s || '').trim().toUpperCase();
+    const keyOf = (name, party) => `${norm(name)}|${norm(party)}`;
+
+    const known = new Map();
+    for (const c of state.benchmark.candidates) {
+      known.set(keyOf(c.name, c.party), c);
+    }
+
+    // Tally votes for unknown candidates across all stations.
+    const supplemental = new Map();
+    for (const r of results) {
+      if (!r) continue;
+      const cands = toArray(r, 'top_candidates', 'candidates');
+      for (const c of cands) {
+        const name  = pick(c, 'candidate_name', 'name');
+        const party = pick(c, 'party_name', 'party');
+        if (!name) continue;
+
+        // Skip pseudo-candidates (blanco/nulos/no marcados)
+        if (isInvalidVotePseudo({
+          name,
+          party_code: pick(c, 'party_code'),
+        })) continue;
+
+        const key = keyOf(name, party);
+        if (known.has(key)) continue; // benchmark already has accurate total
+
+        const votes = Number(pick(c, 'votes', 'total_votes')) || 0;
+        const existing = supplemental.get(key);
+        if (existing) {
+          existing.votes += votes;
+        } else {
+          supplemental.set(key, {
+            name,
+            party,
+            partyCode: pick(c, 'party_code'),
+            votes,
+            pct: null,
+            _partial: true,
+          });
+        }
+      }
+    }
+
+    if (supplemental.size === 0) {
+      state.benchmark._enriching = false;
+      if (state.view === 'candidates') renderCandidates();
+      return;
+    }
+
+    // Merge: existing benchmark candidates + supplemental ones. Recompute pct
+    // for supplemental against total_votes from /benchmark.
+    const totalVotes = state.benchmark.totalVotes;
+    const merged = state.benchmark.candidates.slice();
+    for (const c of supplemental.values()) {
+      c.pct = totalVotes ? (c.votes / totalVotes) * 100 : 0;
+      merged.push(c);
+    }
+    merged.sort((a, b) => b.votes - a.votes);
+
+    state.benchmark.candidates = merged;
+    state.benchmark.totalCandidates = merged.length;
+    state.benchmark._enriched = true;
+    state.benchmark._enriching = false;
+
+    if (state.view === 'candidates') renderCandidates();
+    if (state.view === 'summary') renderSummary();
+  } catch (err) {
+    state.benchmark._enriching = false;
+    if (state.view === 'candidates') renderCandidates();
   }
 }
 
@@ -532,27 +647,49 @@ function renderCandidates() {
     list = list.filter(c => c.party === state.partyFilter);
   }
 
+  // Subtitle: candidate count + enrichment status, so the user always knows
+  // how many candidates the API exposed and whether more data is loading.
+  const total = b.candidates.length;
+  const partial = b.candidates.filter(c => c._partial).length;
+  let sub;
+  if (b._enriching) {
+    sub = `Cargando candidatos adicionales desde los puestos…`;
+  } else if (b._enriched && partial > 0) {
+    sub = `${fmt(total)} candidatos · ${fmt(partial)} suplementados desde puestos (votación parcial).`;
+  } else if (total >= 27 && !b._enriched) {
+    sub = `${fmt(total)} candidatos · puede haber más fuera del top 30 de la API.`;
+  } else {
+    sub = `${fmt(total)} candidatos${state.partyFilter ? ` · ${fmt(list.length)} en "${state.partyFilter}"` : ''}.`;
+  }
+  const subEl = $('#candidates-sub');
+  if (subEl) subEl.textContent = sub;
+
   const maxV = Math.max(...list.map(c => c.votes), 1);
 
-  $('#candidate-list').innerHTML = list.map((c, i) => `
-    <div class="candidate-row">
-      <span class="candidate-row__rank">${i + 1}</span>
-      <div class="candidate-row__name">
-        <span class="candidate-row__color" style="background:${ChartHelpers.color(i)}"></span>
-        <div class="candidate-row__text">
-          <span class="candidate-row__person">${escapeHtml(c.name)}</span>
-          <span class="candidate-row__party">${escapeHtml(c.party)}${c.list ? ' · Lista ' + escapeHtml(String(c.list)) : ''}</span>
+  $('#candidate-list').innerHTML = list.map((c, i) => {
+    const isPartial = c._partial;
+    return `
+      <div class="candidate-row${isPartial ? ' candidate-row--partial' : ''}">
+        <span class="candidate-row__rank">${i + 1}</span>
+        <div class="candidate-row__name">
+          <span class="candidate-row__color" style="background:${ChartHelpers.color(i)}"></span>
+          <div class="candidate-row__text">
+            <span class="candidate-row__person">
+              ${escapeHtml(c.name)}
+              ${isPartial ? '<span class="candidate-row__flag" title="Datos parciales: este candidato no estaba en el top 30 de la API. Su total se construyó sumando puestos donde apareció.">parcial</span>' : ''}
+            </span>
+            <span class="candidate-row__party">${escapeHtml(c.party)}${c.list ? ' · Lista ' + escapeHtml(String(c.list)) : ''}</span>
+          </div>
         </div>
-      </div>
-      <div class="candidate-row__bar">
-        <div class="candidate-row__fill" style="width:${ChartHelpers.pctOfMax(c.votes, maxV)}%; background:${ChartHelpers.color(i)}"></div>
-      </div>
-      <div class="candidate-row__nums">
-        <span class="candidate-row__votes">${fmt(c.votes)}</span>
-        <span class="candidate-row__pct">${fmtPct(c.pct)}</span>
-      </div>
-    </div>
-  `).join('') || emptyState('No hay candidatos para mostrar.');
+        <div class="candidate-row__bar">
+          <div class="candidate-row__fill" style="width:${ChartHelpers.pctOfMax(c.votes, maxV)}%; background:${ChartHelpers.color(i)}"></div>
+        </div>
+        <div class="candidate-row__nums">
+          <span class="candidate-row__votes">${fmt(c.votes)}${isPartial ? '+' : ''}</span>
+          <span class="candidate-row__pct">${fmtPct(c.pct)}</span>
+        </div>
+      </div>`;
+  }).join('') || emptyState('No hay candidatos para mostrar.');
 }
 
 // ----------------------------------------------------------------
