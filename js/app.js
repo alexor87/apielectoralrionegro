@@ -482,6 +482,61 @@ function normalizeBenchmark(payload) {
   };
 }
 
+// ---- Geocode fallback ------------------------------------------------------
+// The Registraduría API doesn't always return lat/lng for every puesto. To
+// keep the map usable we infer an approximate location from the puesto's
+// commune / corregimiento, with a deterministic jitter per station code so
+// puestos in the same zone don't pile on top of each other. Real coords
+// from the API always win over this fallback.
+const RIONEGRO_DEFAULT_CENTER = [6.1539, -75.3738];
+
+const RIONEGRO_ZONE_CENTERS = [
+  // Cabecera urbana (comunas)
+  { match: /COMUNA\s*1|LIBORIO/i,                     center: [6.158, -75.371] },
+  { match: /COMUNA\s*2/i,                             center: [6.157, -75.380] },
+  { match: /COMUNA\s*3|MONS|ALFONSO\s*URIBE|CENTRO/i, center: [6.153, -75.376] },
+  { match: /COMUNA\s*4|PORVENIR/i,                    center: [6.149, -75.382] },
+  // Corregimientos
+  { match: /CTO\s*NORTE|NESTOR.*SANINT|SANINT/i,      center: [6.181, -75.372] },
+  { match: /CTO\s*SUR|CORREGIMIENTO\s*DEL\s*SUR|GALICIA|PONTEZUELA/i,
+                                                       center: [6.128, -75.387] },
+  { match: /CTO\s*CENTRO|CASIMIRO\s*GARCIA|TABLAZO/i, center: [6.142, -75.402] },
+  { match: /JOSE\s*MARIA\s*CORDOVA|CORDOVA\s*M|LLANOGRANDE|AEROPUERTO/i,
+                                                       center: [6.165, -75.425] },
+  { match: /SAN\s*ANTONIO\s*DE\s*PEREIRA|PEREIRA/i,   center: [6.150, -75.353] },
+  // Catch-all for "NACIONAL" / unknown rural — drop near the urban core
+  { match: /NACIONAL/i,                                center: [6.155, -75.373] },
+];
+
+/** Stable hash of a string → unsigned int. Used for jitter. */
+function _hashCode(str) {
+  let h = 0;
+  const s = String(str || '');
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * Resolve [lat, lng] for a polling station. Returns API coords when present,
+ * otherwise picks a zone center and adds a deterministic ~±400m jitter so
+ * multiple puestos in the same zone don't overlap.
+ */
+function resolveStationCoords(rawApiLat, rawApiLng, stationCode, zoneText) {
+  const apiLat = Number(rawApiLat), apiLng = Number(rawApiLng);
+  if (Number.isFinite(apiLat) && Number.isFinite(apiLng)) {
+    return { lat: apiLat, lng: apiLng, approx: false };
+  }
+  let center = RIONEGRO_DEFAULT_CENTER;
+  for (const z of RIONEGRO_ZONE_CENTERS) {
+    if (z.match.test(zoneText || '')) { center = z.center; break; }
+  }
+  const h = _hashCode(stationCode);
+  // ~0.005° ≈ 550m at this latitude — enough to spread within a zone
+  const dLat = (((h % 200) - 100) / 100) * 0.005;
+  const dLng = ((((h >> 8) % 200) - 100) / 100) * 0.005;
+  return { lat: center[0] + dLat, lng: center[1] + dLng, approx: true };
+}
+
 function normalizeMap(payload) {
   if (!payload) return null;
   const root = payload.data || payload;
@@ -493,17 +548,22 @@ function normalizeMap(payload) {
     const topName    = pick(s, 'top_candidate_name', 'top_candidate') || '—';
     const topParty   = pick(s, 'top_party_name', 'top_party') || '—';
     const topPct     = totalVotes ? (topVotes / totalVotes) * 100 : 0;
+    const code       = String(pick(s, 'polling_station_code', 'station_code', 'code', 'id') ?? '');
+    const zone       = pick(s, 'commune', 'zone', 'comuna', 'district') || '';
+
+    const coords = resolveStationCoords(pick(s, 'lat'), pick(s, 'lng'), code, zone);
 
     return {
-      code:       String(pick(s, 'polling_station_code', 'station_code', 'code', 'id') ?? ''),
+      code,
       name:       pick(s, 'polling_station_name', 'station_name', 'name') || 'Puesto',
-      zone:       pick(s, 'commune', 'zone', 'comuna', 'district') || '',
+      zone,
       zoneCode:   pick(s, 'commune_code', 'zone_code') || '',
       address:    pick(s, 'address', 'location') || '',
       totalVotes,
       mesaCount:  Number(pick(s, 'mesa_count', 'tables_count')) || 0,
-      lat:        pick(s, 'lat'),
-      lng:        pick(s, 'lng'),
+      lat:        coords.lat,
+      lng:        coords.lng,
+      coordsApprox: coords.approx,
       topCandidate: { name: topName, party: topParty, votes: topVotes, pct: topPct },
       // Kept for compatibility with code that expects an array; only the winner is known here.
       candidates: topName !== '—'
@@ -821,8 +881,14 @@ const HEAT_GRADIENT_INTENSITY = {
 };
 
 function getMappableStations() {
+  // After resolveStationCoords every station has lat/lng, but keep the guard
+  // in case a future API change reintroduces nulls.
   const list = state.mapData?.stations || [];
   return list.filter(s => Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)));
+}
+
+function approxCount(stations) {
+  return stations.filter(s => s.coordsApprox).length;
 }
 
 /** Normalize candidate names so /benchmark and /station spellings agree. */
@@ -1124,13 +1190,18 @@ function renderMap() {
   }
 
   // Legend & hint
+  const approx = approxCount(stations);
+  const approxNote = approx > 0
+    ? ` · ${approx} de ${stations.length} con posición aproximada por zona`
+    : '';
+
   if (candidateName) {
     const total = values.reduce((a, b) => a + b, 0);
     const stationsWith = values.filter(v => v > 0).length;
     updateLegend({
       kind: 'gradient',
       title: headerLabel,
-      hint: `${fmt(total)} votos en ${fmt(stationsWith)} de ${fmt(stations.length)} puestos`,
+      hint: `${fmt(total)} votos en ${fmt(stationsWith)} de ${fmt(stations.length)} puestos${approxNote}`,
       progress: !mapEnrich.done ? '· cargando datos…' : '',
     });
   } else {
@@ -1138,7 +1209,7 @@ function renderMap() {
     updateLegend({
       kind: 'swatches',
       title: 'Color · candidato ganador',
-      hint: `${fmt(stations.length)} puesto${stations.length === 1 ? '' : 's'} con ubicación`,
+      hint: `${fmt(stations.length)} puesto${stations.length === 1 ? '' : 's'} con ubicación${approxNote}`,
       swatches: top.map((c, i) => ({ color: ChartHelpers.color(i), label: c.name })),
       otherLabel: state.benchmark?.candidates?.length > top.length ? 'Otros' : null,
     });
