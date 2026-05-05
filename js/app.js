@@ -815,14 +815,19 @@ function getMappableStations() {
   return list.filter(s => Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)));
 }
 
+/** Normalize candidate names so /benchmark and /station spellings agree. */
+function normCandName(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
 /**
- * Build a stable color palette: top candidates from the global ranking get
- * curated colors; everyone else is gray. Returns Map<candidateName, hexColor>.
+ * Build a stable color palette keyed by NORMALIZED candidate name: top
+ * candidates from the global ranking get curated colors; everyone else gray.
  */
 function buildCandidatePalette() {
   const palette = new Map();
   const top = (state.benchmark?.candidates || []).slice(0, 8);
-  top.forEach((c, i) => palette.set(c.name, ChartHelpers.color(i)));
+  top.forEach((c, i) => palette.set(normCandName(c.name), ChartHelpers.color(i)));
   return palette;
 }
 
@@ -874,14 +879,15 @@ async function ensureMapEnriched() {
       const root = detail.data || detail;
       const cands = toArray(root, 'top_candidates', 'candidates');
       for (const c of cands) {
-        const name = pick(c, 'candidate_name', 'name');
-        if (!name) continue;
-        if (isInvalidVotePseudo({ name, party_code: pick(c, 'party_code') })) continue;
+        const rawName = pick(c, 'candidate_name', 'name');
+        if (!rawName) continue;
+        if (isInvalidVotePseudo({ name: rawName, party_code: pick(c, 'party_code') })) continue;
+        const key = normCandName(rawName);
         const votes = Number(pick(c, 'votes', 'total_votes')) || 0;
-        let perStation = mapEnrich.byCandidate.get(name);
+        let perStation = mapEnrich.byCandidate.get(key);
         if (!perStation) {
           perStation = new Map();
-          mapEnrich.byCandidate.set(name, perStation);
+          mapEnrich.byCandidate.set(key, perStation);
         }
         perStation.set(station.code, votes);
       }
@@ -918,16 +924,16 @@ function populateMapCandidateFilter() {
   if (!sel) return;
 
   const candidates = (state.benchmark?.candidates || []).slice(0, 30);
-  const current = state.mapCandidate;
+  const current = state.mapCandidate;        // already-normalized
 
   sel.innerHTML = '<option value="">Ganador por puesto</option>' +
     candidates.map(c => {
       const label = `${c.name}${c.party && c.party !== '—' ? ' · ' + c.party : ''}`;
-      return `<option value="${escapeHtml(c.name)}">${escapeHtml(label)}</option>`;
+      return `<option value="${escapeHtml(normCandName(c.name))}">${escapeHtml(label)}</option>`;
     }).join('');
 
   // Restore selection if still valid
-  if (current && candidates.some(c => c.name === current)) {
+  if (current && candidates.some(c => normCandName(c.name) === current)) {
     sel.value = current;
   } else {
     sel.value = '';
@@ -998,17 +1004,22 @@ function renderMap() {
   }
 
   // Decide what we're plotting:
-  //   - candidate selected → heatmap weighted by votes for that candidate,
-  //                          markers tinted by intensity for that candidate
-  //   - else               → heatmap by votos/% ganador (mode toggle),
-  //                          markers colored by winner palette
-  const candidateName = state.mapCandidate;
-  let valueOf, headerLabel;
+  //   - candidate selected → heatmap weighted by votes for that candidate
+  //   - else               → heatmap by votos/% ganador (mode toggle)
+  // Markers are ALWAYS colored by the winning candidate at that puesto, so
+  // territory ownership stays visible. When a candidate is selected, marker
+  // size also scales with that candidate's votes (and zero-vote puestos
+  // get a dashed outline so they're identifiable as "not active here").
+  const candidateName = state.mapCandidate;   // normalized
+  const candidateLabel = candidateName
+    ? ((state.benchmark?.candidates || []).find(c => normCandName(c.name) === candidateName)?.name || candidateName)
+    : '';
 
+  let valueOf, headerLabel;
   if (candidateName) {
     const perStation = mapEnrich.byCandidate.get(candidateName);
     valueOf = (s) => (perStation?.get(s.code)) || 0;
-    headerLabel = `Votos de ${candidateName}`;
+    headerLabel = `Votos de ${candidateLabel}`;
   } else if (state.mapMode === 'winner') {
     valueOf = (s) => Number(s.topCandidate?.pct) || 0;
     headerLabel = 'Intensidad · % del ganador';
@@ -1021,8 +1032,6 @@ function renderMap() {
   const maxV = Math.max(...values, 1);
 
   // Build heat data: [lat, lng, intensity 0..1].
-  // For the candidate-specific view, no floor — stations where the candidate
-  // got 0 votes should be invisible in the heat layer.
   const heatPoints = stations.map(s => {
     const v = valueOf(s);
     const w = candidateName
@@ -1041,47 +1050,40 @@ function renderMap() {
     }).addTo(mapState.map);
   }
 
-  // Markers — colored differently depending on view
+  // Markers — always colored by winner; size by selected metric.
   for (const s of stations) {
-    let fillColor;
-    let radius = 6;
-    let strokeColor = '#0a0a0a';
+    const winnerKey = normCandName(s.topCandidate?.name);
+    const fillColor = palette.get(winnerKey) || PALETTE_OTHER;
+    const v = valueOf(s);
 
+    // Radius: in candidate mode, scale by that candidate's votes (zero = small);
+    // otherwise, scale by total votes (square-root for visual balance).
+    let radius;
     if (candidateName) {
-      // Single-candidate view: tint by intensity
-      const v = valueOf(s);
-      if (v <= 0) {
-        fillColor = '#e5e5e3';
-        strokeColor = '#a3a3a3';
-        radius = 4;
-      } else {
-        fillColor = colorForRamp(v / maxV);
-        radius = 5 + Math.round((v / maxV) * 5);  // 5..10
-      }
+      radius = v > 0 ? 5 + Math.round((v / maxV) * 7) : 4;   // 5..12, or 4 if no votes
     } else {
-      // Winner-per-puesto view: color by the candidate who won there
-      const winnerName = s.topCandidate?.name;
-      fillColor = palette.get(winnerName) || PALETTE_OTHER;
-      radius = Math.max(5, Math.min(11, 4 + Math.round(Math.sqrt(s.totalVotes) / 18)));
+      radius = Math.max(5, Math.min(12, 4 + Math.round(Math.sqrt(s.totalVotes) / 18)));
     }
 
+    const isInactive = candidateName && v <= 0;
     const m = L.circleMarker([Number(s.lat), Number(s.lng)], {
       radius,
-      color: strokeColor,
-      weight: 1,
+      color: '#0a0a0a',
+      weight: isInactive ? 1 : 1.2,
       fillColor,
-      fillOpacity: 0.92,
+      fillOpacity: isInactive ? 0.35 : 0.92,
+      dashArray: isInactive ? '2,2' : null,
     });
 
     const w = s.topCandidate || {};
     const candidateRow = candidateName
       ? `<div class="map-popup__winner" style="margin-top:4px">
-           <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${valueOf(s) > 0 ? colorForRamp(valueOf(s) / maxV) : '#e5e5e3'};margin-right:6px;vertical-align:middle"></span>
-           ${escapeHtml(candidateName)}: <strong>${fmt(valueOf(s))}</strong> votos
+           <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${v > 0 ? colorForRamp(v / maxV) : '#e5e5e3'};margin-right:6px;vertical-align:middle;border:1px solid rgba(0,0,0,0.18)"></span>
+           ${escapeHtml(candidateLabel)}: <strong>${fmt(v)}</strong> votos
          </div>`
       : (w.name && w.name !== '—' ? `
         <div class="map-popup__winner">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${palette.get(w.name) || PALETTE_OTHER};margin-right:6px;vertical-align:middle"></span>
+          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${fillColor};margin-right:6px;vertical-align:middle;border:1px solid rgba(0,0,0,0.18)"></span>
           Ganador: <strong>${escapeHtml(w.name)}</strong> · ${fmtPct(w.pct)}
         </div>` : '');
 
