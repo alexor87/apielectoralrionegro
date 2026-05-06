@@ -1936,6 +1936,24 @@ function normalizePersonName(s) {
     .trim();
 }
 
+/** Levenshtein edit distance between two strings. */
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) dp[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let prev = dp[0]; dp[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j - 1], dp[j]);
+      prev = tmp;
+    }
+  }
+  return dp[b.length];
+}
+
 /** Calculate Δ as { abs, pct, dir } between two numbers. dir: 'up' | 'down' | 'same'. */
 function computeDelta(prev, next) {
   const abs = next - prev;
@@ -2082,17 +2100,43 @@ function renderCompareCandidates(d19, d23) {
   const cands19 = d19.benchmark.candidates.filter(c => !isListEntry(c));
   const cands23 = d23.benchmark.candidates.filter(c => !isListEntry(c));
 
-  const map19 = new Map();
-  for (const c of cands19) {
-    const key = normalizePersonName(c.name);
-    if (key) map19.set(key, c);
-  }
+  // Cache normalizado por candidato 2019 + indexado por (firstToken|lastToken)
+  // para acelerar el fuzzy match.
+  const norm19 = cands19.map(c => {
+    const n = normalizePersonName(c.name);
+    const toks = n.split(' ').filter(Boolean);
+    return { c, norm: n, first: toks[0] || '', last: toks[toks.length - 1] || '' };
+  });
+  const exactIndex = new Map(norm19.map(e => [e.norm, e]));
 
+  const used = new Set(); // 2019 candidates ya emparejados
   const rows = [];
   for (const c23 of cands23) {
-    const key = normalizePersonName(c23.name);
-    const c19 = map19.get(key);
-    if (!c19) continue;
+    const norm23 = normalizePersonName(c23.name);
+    if (!norm23) continue;
+    const tok23 = norm23.split(' ').filter(Boolean);
+    const first23 = tok23[0] || '';
+    const last23 = tok23[tok23.length - 1] || '';
+
+    let match = exactIndex.get(norm23);
+    if (match && used.has(match.c)) match = null;
+
+    // Fuzzy fallback: mismo primer y último token, Levenshtein ≤ 3 (typos
+    // como CASARRUBIOS / CASARRUBIO, JIMÉNEZ con/sin espacio, etc.).
+    if (!match && first23 && last23) {
+      let best = null, bestDist = 4;
+      for (const e of norm19) {
+        if (used.has(e.c)) continue;
+        if (e.first !== first23 || e.last !== last23) continue;
+        const d = levenshtein(e.norm, norm23);
+        if (d < bestDist) { best = e; bestDist = d; }
+      }
+      if (best) match = best;
+    }
+    if (!match) continue;
+    used.add(match.c);
+    const c19 = match.c;
+
     rows.push({
       name: titleCase(c23.name),
       party19: c19.party,
