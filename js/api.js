@@ -66,12 +66,12 @@ const ElectoralAPI = (() => {
 
   async function getBenchmark(electionId, corporationCode) {
     const r = await getResults(electionId, corporationCode);
-    return { data: r.benchmark };
+    return r.benchmark;
   }
 
   async function getMap(electionId, corporationCode) {
     const r = await getResults(electionId, corporationCode);
-    return { data: { polling_stations: r.polling_stations } };
+    return { polling_stations: r.polling_stations };
   }
 
   async function getStation(electionId, corporationCode, stationCode) {
@@ -83,34 +83,32 @@ const ElectoralAPI = (() => {
         status: 404,
       });
     }
-    return { data: detail };
+    return detail;
   }
 
   async function getContextAI(electionId, corporationCode) {
     // Build a compact context on demand from the cached results JSON.
     const r = await getResults(electionId, corporationCode);
     return {
-      data: {
-        election_id: r.election_id,
-        corporation_code: r.corporation_code,
-        corporation_name: r.corporation_name,
-        municipality_code: r.municipality_code,
-        municipality_name: r.municipality_name,
-        total_votes: r.benchmark.total_votes,
-        polling_stations_count: r.benchmark.polling_stations_count,
-        top_candidates: r.benchmark.candidates.slice(0, 10),
-        top_parties: r.benchmark.parties.slice(0, 10),
-        polling_stations: r.polling_stations.map(s => ({
-          polling_station_code: s.polling_station_code,
-          polling_station_name: s.polling_station_name,
-          commune: s.commune,
-          total_votes: s.total_votes,
-          mesa_count: s.mesa_count,
-          top_candidate_name: s.top_candidate_name,
-          top_candidate_votes: s.top_candidate_votes,
-          top_party_name: s.top_party_name,
-        })),
-      },
+      election_id: r.election_id,
+      corporation_code: r.corporation_code,
+      corporation_name: r.corporation_name,
+      municipality_code: r.municipality_code,
+      municipality_name: r.municipality_name,
+      total_votes: r.benchmark.total_votes,
+      polling_stations_count: r.benchmark.polling_stations_count,
+      top_candidates: r.benchmark.candidates.slice(0, 10),
+      top_parties: r.benchmark.parties.slice(0, 10),
+      polling_stations: r.polling_stations.map(s => ({
+        polling_station_code: s.polling_station_code,
+        polling_station_name: s.polling_station_name,
+        commune: s.commune,
+        total_votes: s.total_votes,
+        mesa_count: s.mesa_count,
+        top_candidate_name: s.top_candidate_name,
+        top_candidate_votes: s.top_candidate_votes,
+        top_party_name: s.top_party_name,
+      })),
     };
   }
 
