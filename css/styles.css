@@ -1070,7 +1070,7 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 2000; /* Above Leaflet panes (~400-700) y controles (1000) */
   display: grid;
   place-items: center;
   padding: var(--s-6);
