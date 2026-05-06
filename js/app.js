@@ -493,7 +493,7 @@ const RIONEGRO_DEFAULT_CENTER = [6.1539, -75.3738];
 const RIONEGRO_ZONE_CENTERS = [
   // Cabecera urbana (comunas)
   { match: /COMUNA\s*1|LIBORIO/i,                     center: [6.158, -75.371] },
-  { match: /COMUNA\s*2/i,                             center: [6.157, -75.380] },
+  { match: /COMUNA\s*2|SAN\s*ANTONIO(?!\s*DE)/i,       center: [6.157, -75.380] },
   { match: /COMUNA\s*3|MONS|ALFONSO\s*URIBE|CENTRO/i, center: [6.153, -75.376] },
   { match: /COMUNA\s*4|PORVENIR/i,                    center: [6.149, -75.382] },
   // Corregimientos

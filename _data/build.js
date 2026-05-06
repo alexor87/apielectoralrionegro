@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
- * Procesa el CSV oficial de la Registraduría (MMV_TERRITORIALES2023_ANTIOQUIA)
- * y genera los JSON estáticos que consume el portal — uno por corporación
+ * Procesa los CSV oficiales de la Registraduría (MMV TERRITORIALES) y genera
+ * los JSON estáticos que consume el portal — uno por (elección, corporación)
  * con estructura idéntica a las respuestas de scrutix.co.
+ *
+ * Soporta múltiples años. Cada elección tiene su propio CSV en _data/.
  *
  * Uso:
  *   node _data/build.js
  *
  * Lee:   _data/MMV_2023_01_ANTIOQUIA.csv
+ *        _data/MMV_2019_01_ANTIOQUIA.csv
  * Emite: data/elections.json
- *        data/corporations/territoriales-2023.json
- *        data/results/territoriales-2023_{CORP}.json   (uno por corporación)
+ *        data/corporations/{election_id}.json   (uno por elección)
+ *        data/results/{election_id}_{CORP}.json (uno por corporación por elección)
  */
 
 const fs = require('fs');
@@ -18,21 +21,87 @@ const path = require('path');
 const readline = require('readline');
 
 const ROOT = path.resolve(__dirname, '..');
-const CSV_PATH = path.join(__dirname, 'MMV_2023_01_ANTIOQUIA.csv');
 const OUT_DIR = path.join(ROOT, 'data');
-
-const ELECTION = {
-  id: 'territoriales-2023',
-  name: 'Elecciones Territoriales 2023',
-  year: 2023,
-  date: '2023-10-29',
-};
 
 const MUNICIPALITY_CODE = '214'; // Rionegro
 const MUNICIPALITY_NAME = 'RIONEGRO';
 
-// Composite candidate keys that represent invalid/blank votes, not real
-// candidates. They live under the synthetic party "00000 CANDIDATOS TOTALES".
+// ----------------------------------------------------------------
+// Elecciones a procesar (orden = orden en el dropdown; el primero queda
+// como default al cargar el portal).
+// ----------------------------------------------------------------
+const ELECTIONS = [
+  { id: 'territoriales-2023', name: 'Elecciones Territoriales 2023', year: 2023, date: '2023-10-29',
+    csv: 'MMV_2023_01_ANTIOQUIA.csv' },
+  { id: 'territoriales-2019', name: 'Elecciones Territoriales 2019', year: 2019, date: '2019-10-27',
+    csv: 'MMV_2019_01_ANTIOQUIA.csv' },
+];
+
+// ----------------------------------------------------------------
+// Registro canónico de puestos.
+// Cuando un puesto físico aparece en varios años con códigos/nombres
+// distintos, lo unificamos aquí. El nombre y comuna canónicos siguen el
+// formato 2023.
+// ----------------------------------------------------------------
+const CANONICAL_PUESTOS = [
+  // === 4 matches confirmados (mismo lugar, código y/o nombre cambió entre años) ===
+  { id: '01-01', name: 'I.E. JULIO SANIN', commune: 'COMUNA 1 LIBORIO MEJIA',
+    aliases: [{ year: 2019, zone: '01', puesto: '02' }, { year: 2023, zone: '01', puesto: '01' }] },
+
+  { id: '03-01', name: 'IE SAN ANTONIO', commune: 'COMUNA 2 SAN ANTONIO',
+    aliases: [{ year: 2019, zone: '03', puesto: '01' }, { year: 2023, zone: '03', puesto: '01' }] },
+
+  { id: '03-04', name: 'IE JOSEFINA MUÑOZ GONZALEZ SD CUATRO ESQ',
+    commune: 'COMUNA 3 MONS. ALFONSO URIBE J',
+    aliases: [{ year: 2019, zone: '03', puesto: '04' }, { year: 2023, zone: '03', puesto: '04' }] },
+
+  { id: '02-02', name: 'IE JOSEFINA MUÑOZ GONZALEZ SD BALDOMERO',
+    commune: 'COMUNA 1 LIBORIO MEJIA',
+    aliases: [{ year: 2019, zone: '90', puesto: '01' }, { year: 2023, zone: '02', puesto: '02' }] },
+
+  // === Puestos 2019-only DESPLAZADOS para evitar colisión de código ===
+  // Su código raw (01-01 / 02-02) ahora pertenece a un puesto canónico de 2023.
+  { id: '2019-01-01', name: 'I.E. JOSEFINA MUÑOZ GONZALEZ',
+    commune: 'COMUNA 1 LIBORIO MEJIA',
+    aliases: [{ year: 2019, zone: '01', puesto: '01' }] },
+
+  { id: '2019-02-02', name: 'COL QUEBRADA ARRIBA',
+    commune: 'COMUNA 2 SAN ANTONIO',
+    aliases: [{ year: 2019, zone: '02', puesto: '02' }] },
+];
+
+// Lookup por (year, zone, puesto). Construido una vez al inicio.
+const CANONICAL_INDEX = new Map();
+for (const c of CANONICAL_PUESTOS) {
+  for (const a of c.aliases) {
+    CANONICAL_INDEX.set(`${a.year}|${a.zone}|${a.puesto}`, {
+      id: c.id, name: c.name, commune: c.commune,
+    });
+  }
+}
+
+function lookupCanonical(year, zone, puesto) {
+  return CANONICAL_INDEX.get(`${year}|${zone}|${puesto}`) || null;
+}
+
+// ----------------------------------------------------------------
+// Normalización de nombre de comuna.
+// El CSV 2019 trae prefijo numérico pegado al nombre y typos en la fuente
+// (LIBONO en vez de LIBORIO, ALFONOS en vez de ALFONSO). Limpiamos.
+// ----------------------------------------------------------------
+function normalizeComuna(raw) {
+  if (!raw || raw === 'NULL') return '';
+  let s = String(raw).trim();
+  s = s.replace(/^\d{2}/, '');             // strip prefijo 2019 "01..."
+  s = s.replace(/LIBONO/gi, 'LIBORIO');    // typo Registraduría 2019
+  s = s.replace(/ALFONOS/gi, 'ALFONSO');   // typo Registraduría 2019
+  return s.trim();
+}
+
+// ----------------------------------------------------------------
+// Constantes de candidato
+// ----------------------------------------------------------------
+// Composite candidate keys que representan votos no-candidato.
 const INVALID_CANDIDATE_CODES = new Set([
   '00000_00996', // VOTOS EN BLANCO
   '00000_00997', // VOTOS NULOS
@@ -66,27 +135,11 @@ function parseCsvLine(line) {
 }
 
 // ----------------------------------------------------------------
-// Aggregation
+// Aggregation helpers (operan sobre un Map por elección, no global)
 // ----------------------------------------------------------------
-// data[corpCode] = {
-//   corp_name,
-//   total_votes,
-//   candidates: Map<candidate_code, {name, party_code, party_name, votes}>,
-//   parties: Map<party_code, {name, votes}>,
-//   stations: Map<station_key, {
-//     code, name, zone_code, puesto_code, commune_code, commune,
-//     total_votes,
-//     mesas: Map<mesa_num, {
-//       total_votes,
-//       candidates: Map<candidate_code, {name, party_code, votes}>
-//     }>
-//   }>
-// }
-const data = new Map();
-
-function getCorp(code, name) {
-  if (!data.has(code)) {
-    data.set(code, {
+function getCorp(corps, code, name) {
+  if (!corps.has(code)) {
+    corps.set(code, {
       code,
       name,
       total_votes: 0,
@@ -95,7 +148,7 @@ function getCorp(code, name) {
       stations: new Map(),
     });
   }
-  return data.get(code);
+  return corps.get(code);
 }
 
 function getStation(corp, key, meta) {
@@ -120,11 +173,14 @@ function getMesa(station, num) {
 }
 
 // ----------------------------------------------------------------
-// Stream and process
+// Procesa un CSV completo y devuelve un Map de corporaciones agregadas.
 // ----------------------------------------------------------------
-async function processCsv() {
+async function processCsv(election) {
+  const csvPath = path.join(__dirname, election.csv);
+  const corps = new Map();
+
   const rl = readline.createInterface({
-    input: fs.createReadStream(CSV_PATH),
+    input: fs.createReadStream(csvPath),
     crlfDelay: Infinity,
   });
 
@@ -149,25 +205,31 @@ async function processCsv() {
     const corpName = f[11];
     const zoneCode = f[4];
     const puestoCode = f[5];
-    const puestoName = f[6];
+    const rawPuestoName = f[6];
     const mesa = f[7];
     const comunaCode = f[8];
-    const comunaName = f[9];
+    const rawComunaName = f[9];
     const partyCode = f[13];
     const partyName = f[14];
     const candCode = f[15];
     const candName = f[16];
     const votes = Number(f[17]) || 0;
 
-    const corp = getCorp(corpCode, corpName);
-    const stationKey = `${zoneCode}-${puestoCode}`;
+    // Aplicar el override canónico cuando hay match. Si no, el código y
+    // nombre crudos del CSV son el id del puesto.
+    const canonical = lookupCanonical(election.year, zoneCode, puestoCode);
+    const stationKey = canonical ? canonical.id : `${zoneCode}-${puestoCode}`;
+    const stationName = canonical ? canonical.name : rawPuestoName;
+    const stationCommune = canonical ? canonical.commune : normalizeComuna(rawComunaName);
+
+    const corp = getCorp(corps, corpCode, corpName);
     const station = getStation(corp, stationKey, {
       code: stationKey,
-      name: puestoName,
+      name: stationName,
       zone_code: zoneCode,
       puesto_code: puestoCode,
       commune_code: comunaCode,
-      commune: comunaName,
+      commune: stationCommune,
     });
     const mesaObj = getMesa(station, mesa);
 
@@ -178,9 +240,7 @@ async function processCsv() {
 
     // Per-candidate aggregation at all levels.
     // Composite key: in Concejo/Asamblea/JAL each party numbers its candidates
-    // 1..N, so plain candCode collides across parties. The composite uniquely
-    // identifies a candidate and is also exposed as `candidate_code` in the
-    // output JSON so app.js can match top-N entries against per-mesa rows.
+    // 1..N, so plain candCode collides across parties.
     const candKey = `${partyCode}_${candCode}`;
     if (!mesaObj.candidates.has(candKey)) {
       mesaObj.candidates.set(candKey, {
@@ -216,7 +276,8 @@ async function processCsv() {
     }
   }
 
-  console.log(`Procesadas ${processed} filas, ${kept} de Rionegro (${MUNICIPALITY_NAME}).`);
+  console.log(`  ${election.id}: ${processed} filas procesadas, ${kept} de Rionegro.`);
+  return corps;
 }
 
 // ----------------------------------------------------------------
@@ -226,7 +287,7 @@ function isInvalid(candCode) {
   return INVALID_CANDIDATE_CODES.has(candCode);
 }
 
-function buildResultJson(corp) {
+function buildResultJson(election, corp) {
   // Real candidates (excluding blank/null/no marcado).
   const realCandidates = [...corp.candidates.values()]
     .filter(c => !isInvalid(c.candidate_code))
@@ -271,7 +332,6 @@ function buildResultJson(corp) {
       if (!topCand || c.votes > topCand.votes) topCand = c;
     }
 
-    // Find party_name from the corporation candidate registry.
     let topPartyName = '';
     if (topCand) {
       const enriched = corp.candidates.get(topCand.candidate_code);
@@ -296,7 +356,6 @@ function buildResultJson(corp) {
   // Per-station detail with mesas + candidate breakdown.
   const stationsDetail = {};
   for (const st of corp.stations.values()) {
-    // Top candidates for this station (by aggregated votes across its mesas).
     const stationByCand = new Map();
     for (const m of st.mesas.values()) {
       for (const c of m.candidates.values()) {
@@ -352,7 +411,7 @@ function buildResultJson(corp) {
   }
 
   return {
-    election_id: ELECTION.id,
+    election_id: election.id,
     corporation_code: corp.code,
     corporation_name: corp.name,
     municipality_code: MUNICIPALITY_CODE,
@@ -381,46 +440,53 @@ function writeJson(filePath, obj) {
 }
 
 async function main() {
-  console.log('Procesando CSV...');
-  await processCsv();
+  console.log('Procesando CSVs...');
 
-  console.log(`\nCorporaciones encontradas: ${data.size}`);
-  for (const corp of data.values()) {
-    console.log(`  ${corp.code} ${corp.name}: ${corp.stations.size} puestos, ${corp.candidates.size} candidatos, ${corp.parties.size} partidos`);
+  // Procesar cada elección y guardar su Map de corporaciones.
+  const results = [];
+  for (const election of ELECTIONS) {
+    const corps = await processCsv(election);
+    results.push({ election, corps });
+  }
+
+  console.log('\nResumen por elección:');
+  for (const { election, corps } of results) {
+    console.log(`  ${election.id}:`);
+    for (const corp of corps.values()) {
+      console.log(`    ${corp.code} ${corp.name}: ${corp.stations.size} puestos, ${corp.candidates.size} candidatos, ${corp.parties.size} partidos`);
+    }
   }
 
   console.log('\nEscribiendo JSON...');
 
-  // 1) elections.json
+  // 1) elections.json — todas las elecciones en orden.
   writeJson(path.join(OUT_DIR, 'elections.json'), {
-    elections: [{
-      id: ELECTION.id,
-      name: ELECTION.name,
-      year: ELECTION.year,
-      date: ELECTION.date,
-    }],
+    elections: ELECTIONS.map(e => ({
+      id: e.id, name: e.name, year: e.year, date: e.date,
+    })),
   });
 
-  // 2) corporations/{election_id}.json
-  const corporations = [...data.values()]
-    .sort((a, b) => a.code.localeCompare(b.code))
-    .map(c => ({
-      corporation_code: c.code,
-      name: c.name,
-      total_votes: c.total_votes,
-    }));
-  writeJson(
-    path.join(OUT_DIR, 'corporations', `${ELECTION.id}.json`),
-    { corporations }
-  );
-
-  // 3) results/{election_id}_{corp_code}.json
-  for (const corp of data.values()) {
-    const result = buildResultJson(corp);
+  // 2) Por cada elección: corporations + results
+  for (const { election, corps } of results) {
+    const corporations = [...corps.values()]
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .map(c => ({
+        corporation_code: c.code,
+        name: c.name,
+        total_votes: c.total_votes,
+      }));
     writeJson(
-      path.join(OUT_DIR, 'results', `${ELECTION.id}_${corp.code}.json`),
-      result
+      path.join(OUT_DIR, 'corporations', `${election.id}.json`),
+      { corporations }
     );
+
+    for (const corp of corps.values()) {
+      const result = buildResultJson(election, corp);
+      writeJson(
+        path.join(OUT_DIR, 'results', `${election.id}_${corp.code}.json`),
+        result
+      );
+    }
   }
 
   console.log('\nListo.');
