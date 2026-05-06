@@ -12,3 +12,7 @@ worker/.wrangler/
 
 # CSV fuente (~448MB) — no se versiona, se procesa local con _data/build.js
 _data/*.csv
+
+.dev.vars*
+!.dev.vars.example
+!.env.example
