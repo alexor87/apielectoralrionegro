@@ -2235,7 +2235,6 @@ function renderCompareStations(d19, d23) {
         <header class="compare-station-card__head">
           <h4 class="compare-station-card__name">${escapeHtml(titleCase(s23.name))}</h4>
           ${s23.zone ? `<div class="compare-station-card__zone">${escapeHtml(titleCase(s23.zone))}</div>` : ''}
-          ${flipped ? '<span class="compare-station-card__flip">Volteó</span>' : ''}
         </header>
         ${compareStationRow('2019', s19)}
         ${compareStationRow('2023', s23)}
