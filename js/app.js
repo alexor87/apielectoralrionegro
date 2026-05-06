@@ -2233,10 +2233,8 @@ function renderCompareStations(d19, d23) {
     return `
       <article class="compare-station-card${flipped ? ' compare-station-card--flipped' : ''}">
         <header class="compare-station-card__head">
-          <div>
-            <h4 class="compare-station-card__name">${escapeHtml(titleCase(s23.name))}</h4>
-            ${s23.zone ? `<div class="compare-station-card__zone">${escapeHtml(titleCase(s23.zone))}</div>` : ''}
-          </div>
+          <h4 class="compare-station-card__name">${escapeHtml(titleCase(s23.name))}</h4>
+          ${s23.zone ? `<div class="compare-station-card__zone">${escapeHtml(titleCase(s23.zone))}</div>` : ''}
           ${flipped ? '<span class="compare-station-card__flip">Volteó</span>' : ''}
         </header>
         ${compareStationRow('2019', s19)}
@@ -2253,11 +2251,9 @@ function compareStationRow(year, station) {
   return `
     <div class="compare-station-row">
       <span class="compare-station-row__year">${year}</span>
-      <div class="compare-station-row__winner">
-        <span class="compare-station-row__name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
-        ${party ? `<span class="compare-station-row__party" title="${escapeHtml(party)}">${escapeHtml(party)}</span>` : ''}
-      </div>
       <span class="compare-station-row__pct">${fmtPct(w.pct)}</span>
+      <div class="compare-station-row__name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+      ${party ? `<div class="compare-station-row__party">${escapeHtml(party)}</div>` : ''}
     </div>
   `;
 }
