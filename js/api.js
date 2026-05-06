@@ -1,196 +1,16 @@
 /* ============================================================
-   Electoral API client
-   Talks to the Cloudflare Worker proxy (see /worker), not directly
-   to scrutix.co — the real API key lives only inside the Worker.
-   The browser sends a shared password via `X-Portal-Password`.
+   Electoral API client (modo local)
+   Lee los JSON estáticos en /data/ generados desde el CSV oficial
+   de la Registraduría (ver _data/build.js). El portal ya no depende
+   de scrutix.co — los datos viajan con el repo.
    ============================================================ */
 
 const ElectoralAPI = (() => {
   const MUNICIPALITY_CODE = '214'; // Rionegro, Antioquia
-  const PWD_STORAGE = 'electoral_portal_password';
+  const DATA_BASE = 'data';
 
-  // In-memory cache: keyed by URL+params hash
-  const cache = new Map();
-
-  /** Resolve the proxy base URL from window config. */
-  function getProxyBase() {
-    const base = (window.PORTAL_CONFIG && window.PORTAL_CONFIG.PROXY_URL) || '';
-    return base.replace(/\/$/, '');
-  }
-
-  /** Whether the frontend is wired up to a real Worker. */
-  function isConfigured() {
-    const base = getProxyBase();
-    return !!base && !/YOUR-/i.test(base);
-  }
-
-  /** Get the access password from localStorage. */
-  function getPassword() {
-    return localStorage.getItem(PWD_STORAGE) || '';
-  }
-
-  function setPassword(value) {
-    localStorage.setItem(PWD_STORAGE, value);
-  }
-
-  function clearPassword() {
-    localStorage.removeItem(PWD_STORAGE);
-    cache.clear();
-  }
-
-  function hasPassword() {
-    return !!getPassword();
-  }
-
-  /** Build URL with query parameters, skipping empty values. */
-  function buildURL(path, params = {}) {
-    const url = new URL(getProxyBase() + path);
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v));
-      }
-    }
-    return url.toString();
-  }
-
-  /**
-   * Low-level fetch with auth, error normalization, and optional caching.
-   * @param {string} path - API path beginning with `/`
-   * @param {object} params - query params
-   * @param {object} [opts] - { cache: boolean }
-   */
-  async function request(path, params = {}, opts = {}) {
-    if (!isConfigured()) {
-      throw new APIError(
-        'El portal no tiene PROXY_URL configurada. Edita js/config.js con la URL del Cloudflare Worker.',
-        { code: 'NO_PROXY' }
-      );
-    }
-
-    const url = buildURL(path, params);
-    const useCache = opts.cache !== false;
-
-    if (useCache && cache.has(url)) {
-      return cache.get(url);
-    }
-
-    const password = getPassword();
-    if (!password) {
-      throw new APIError('No hay contraseña configurada.', { code: 'NO_AUTH' });
-    }
-
-    let resp;
-    try {
-      resp = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'X-Portal-Password': password,
-          'Accept': 'application/json',
-        },
-      });
-    } catch (err) {
-      throw new APIError('No se pudo conectar al servidor. Verifica tu conexión.', {
-        code: 'NETWORK',
-        cause: err,
-      });
-    }
-
-    if (!resp.ok) {
-      let detail = '';
-      try {
-        const body = await resp.json();
-        detail = body?.message || body?.error || '';
-      } catch (_) { /* not json */ }
-
-      if (resp.status === 401) {
-        throw new APIError(detail || 'Contraseña inválida.', {
-          code: 'AUTH',
-          status: 401,
-        });
-      }
-      if (resp.status === 403) {
-        throw new APIError(detail || 'Acceso denegado.', {
-          code: 'AUTH',
-          status: 403,
-        });
-      }
-      if (resp.status === 429) {
-        throw new APIError('Has superado el límite de consultas. Espera un momento.', {
-          code: 'RATE_LIMIT',
-          status: 429,
-        });
-      }
-      if (resp.status === 502 || resp.status === 504) {
-        throw new APIError(detail || 'La API electoral no está respondiendo.', {
-          code: 'UPSTREAM',
-          status: resp.status,
-        });
-      }
-      throw new APIError(detail || `Error ${resp.status} en la consulta.`, {
-        code: 'HTTP',
-        status: resp.status,
-      });
-    }
-
-    const data = await resp.json();
-    if (useCache) cache.set(url, data);
-    return data;
-  }
-
-  /** Validate the current password by hitting /elections. Throws on failure. */
-  async function validateAuth() {
-    return request('/elections', {}, { cache: false });
-  }
-
-  /** GET /elections — list of available elections. */
-  function getElections() {
-    return request('/elections');
-  }
-
-  /** GET /corporations?election_id=…&municipality_code=214 */
-  function getCorporations(electionId) {
-    return request('/corporations', {
-      election_id: electionId,
-      municipality_code: MUNICIPALITY_CODE,
-    });
-  }
-
-  /** GET /benchmark — top candidates and parties for a corporation. */
-  function getBenchmark(electionId, corporationCode) {
-    return request('/benchmark', {
-      election_id: electionId,
-      municipality_code: MUNICIPALITY_CODE,
-      corporation_code: corporationCode,
-    });
-  }
-
-  /** GET /map — results by polling station, with candidate breakdown. */
-  function getMap(electionId, corporationCode) {
-    return request('/map', {
-      election_id: electionId,
-      municipality_code: MUNICIPALITY_CODE,
-      corporation_code: corporationCode,
-    });
-  }
-
-  /** GET /station — full detail for a single polling station. */
-  function getStation(electionId, corporationCode, stationCode) {
-    return request('/station', {
-      election_id: electionId,
-      municipality_code: MUNICIPALITY_CODE,
-      corporation_code: corporationCode,
-      polling_station_code: stationCode,
-    });
-  }
-
-  /** GET /context-ai — pre-computed compact context for LLM consumption. */
-  function getContextAI(electionId, corporationCode) {
-    return request('/context-ai', {
-      election_id: electionId,
-      municipality_code: MUNICIPALITY_CODE,
-      corporation_code: corporationCode,
-    });
-  }
+  // In-memory cache of fetched JSON, keyed by URL.
+  const fileCache = new Map();
 
   /** Custom error with structured info. */
   class APIError extends Error {
@@ -203,12 +23,112 @@ const ElectoralAPI = (() => {
     }
   }
 
+  async function fetchJson(relPath) {
+    if (fileCache.has(relPath)) return fileCache.get(relPath);
+
+    let resp;
+    try {
+      resp = await fetch(`${DATA_BASE}/${relPath}`, {
+        headers: { 'Accept': 'application/json' },
+      });
+    } catch (err) {
+      throw new APIError('No se pudo cargar el archivo de datos.', {
+        code: 'NETWORK',
+        cause: err,
+      });
+    }
+    if (!resp.ok) {
+      throw new APIError(`Datos no disponibles (${resp.status}).`, {
+        code: 'HTTP',
+        status: resp.status,
+      });
+    }
+    const data = await resp.json();
+    fileCache.set(relPath, data);
+    return data;
+  }
+
+  function getResults(electionId, corporationCode) {
+    return fetchJson(`results/${electionId}_${corporationCode}.json`);
+  }
+
+  // ----------------------------------------------------------------
+  // Public surface — same shape as the previous scrutix-backed client
+  // ----------------------------------------------------------------
+
+  function getElections() {
+    return fetchJson('elections.json');
+  }
+
+  function getCorporations(electionId) {
+    return fetchJson(`corporations/${electionId}.json`);
+  }
+
+  async function getBenchmark(electionId, corporationCode) {
+    const r = await getResults(electionId, corporationCode);
+    return { data: r.benchmark };
+  }
+
+  async function getMap(electionId, corporationCode) {
+    const r = await getResults(electionId, corporationCode);
+    return { data: { polling_stations: r.polling_stations } };
+  }
+
+  async function getStation(electionId, corporationCode, stationCode) {
+    const r = await getResults(electionId, corporationCode);
+    const detail = r.stations_detail?.[stationCode];
+    if (!detail) {
+      throw new APIError('Puesto no encontrado en los datos locales.', {
+        code: 'NOT_FOUND',
+        status: 404,
+      });
+    }
+    return { data: detail };
+  }
+
+  async function getContextAI(electionId, corporationCode) {
+    // Build a compact context on demand from the cached results JSON.
+    const r = await getResults(electionId, corporationCode);
+    return {
+      data: {
+        election_id: r.election_id,
+        corporation_code: r.corporation_code,
+        corporation_name: r.corporation_name,
+        municipality_code: r.municipality_code,
+        municipality_name: r.municipality_name,
+        total_votes: r.benchmark.total_votes,
+        polling_stations_count: r.benchmark.polling_stations_count,
+        top_candidates: r.benchmark.candidates.slice(0, 10),
+        top_parties: r.benchmark.parties.slice(0, 10),
+        polling_stations: r.polling_stations.map(s => ({
+          polling_station_code: s.polling_station_code,
+          polling_station_name: s.polling_station_name,
+          commune: s.commune,
+          total_votes: s.total_votes,
+          mesa_count: s.mesa_count,
+          top_candidate_name: s.top_candidate_name,
+          top_candidate_votes: s.top_candidate_votes,
+          top_party_name: s.top_party_name,
+        })),
+      },
+    };
+  }
+
+  // ----------------------------------------------------------------
+  // Legacy auth no-ops — datos ahora son públicos, no hay password
+  // ----------------------------------------------------------------
+  function isConfigured() { return true; }
+  function hasPassword()  { return true; }
+  function getPassword()  { return ''; }
+  function setPassword(_) { /* no-op */ }
+  function clearPassword() { fileCache.clear(); }
+  async function validateAuth() { return getElections(); }
+
   return {
     MUNICIPALITY_CODE,
     APIError,
     isConfigured,
     getPassword, setPassword, clearPassword, hasPassword,
-    // Backwards-compatible aliases used by older app code paths.
     hasKey: hasPassword,
     setKey: setPassword,
     getKey: getPassword,
