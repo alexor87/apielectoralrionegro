@@ -59,8 +59,20 @@ const CANONICAL_PUESTOS = [
     commune: 'COMUNA 1 LIBORIO MEJIA',
     aliases: [{ year: 2019, zone: '90', puesto: '01' }, { year: 2023, zone: '02', puesto: '02' }] },
 
+  // 99-A2: en 2019 'COL CABECERAS (CORREG. DEL SUR)', en 2023 'IE GILBERTO ECHEVERRY MEJIA'.
+  { id: '99-A2', name: 'I E GILBERTO ECHEVERRY MEJIA',
+    commune: 'CORREGIMIENTO DEL SUR',
+    aliases: [{ year: 2019, zone: '99', puesto: 'A2' }, { year: 2023, zone: '99', puesto: 'A2' }] },
+
+  // 99-B1: en 2019 'JOSE MARIA CORDOVA MUÑOZ', en 2023 'IE ANTONIO DONADO CAMACHO'.
+  { id: '99-B1', name: 'I E ANTONIO DONADO CAMACHO',
+    commune: 'CTO JOSE MARIA CORDOVA M',
+    aliases: [{ year: 2019, zone: '99', puesto: 'B1' }, { year: 2023, zone: '99', puesto: 'B1' }] },
+
   // === Puestos 2019-only DESPLAZADOS para evitar colisión de código ===
-  // Su código raw (01-01 / 02-02) ahora pertenece a un puesto canónico de 2023.
+  // Sus códigos raw (01-01, 02-02, 03-03, 99-C1, 99-D1) coinciden por casualidad
+  // con códigos canónicos de 2023 que son lugares físicos DISTINTOS. Les damos
+  // un id 2019-prefixed para que la Comparativa no los cruce mal.
   { id: '2019-01-01', name: 'I.E. JOSEFINA MUÑOZ GONZALEZ',
     commune: 'COMUNA 1 LIBORIO MEJIA',
     aliases: [{ year: 2019, zone: '01', puesto: '01' }] },
@@ -68,6 +80,18 @@ const CANONICAL_PUESTOS = [
   { id: '2019-02-02', name: 'COL QUEBRADA ARRIBA',
     commune: 'COMUNA 2 SAN ANTONIO',
     aliases: [{ year: 2019, zone: '02', puesto: '02' }] },
+
+  { id: '2019-03-03', name: 'IE EL TRIANGULO',
+    commune: 'COMUNA 3 MONS. ALFONSO URIBE J',
+    aliases: [{ year: 2019, zone: '03', puesto: '03' }] },
+
+  { id: '2019-99-C1', name: 'CORREGIMIENTO CENTRO',
+    commune: 'CTO CENTRO CASIMIRO GARCIA',
+    aliases: [{ year: 2019, zone: '99', puesto: 'C1' }] },
+
+  { id: '2019-99-D1', name: 'CORREGIMIENTO NORTE',
+    commune: 'CTO NORTE NESTOR E. SANINT ALV',
+    aliases: [{ year: 2019, zone: '99', puesto: 'D1' }] },
 ];
 
 // Lookup por (year, zone, puesto). Construido una vez al inicio.

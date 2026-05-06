@@ -12,9 +12,9 @@
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <link rel="stylesheet" href="css/styles.css?v=1778036887" />
+  <link rel="stylesheet" href="css/styles.css?v=1778038889" />
 
-  <script src="js/config.js?v=1778036887"></script>
+  <script src="js/config.js?v=1778038889"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
@@ -73,7 +73,7 @@
       </div>
 
       <div class="topbar__filters">
-        <label class="select">
+        <label class="select" id="election-select-wrap">
           <span class="select__label">Elección</span>
           <select id="election-select" disabled></select>
         </label>
@@ -104,6 +104,7 @@
       <button class="tab" data-view="parties" role="tab" aria-selected="false">Partidos</button>
       <button class="tab" data-view="stations" role="tab" aria-selected="false">Puestos</button>
       <button class="tab" data-view="map" role="tab" aria-selected="false">Mapa</button>
+      <button class="tab" data-view="compare" role="tab" aria-selected="false">Comparativa</button>
     </nav>
 
     <section id="content" class="content">
@@ -275,6 +276,38 @@
           </div>
         </div>
       </article>
+
+      <article id="view-compare" class="view" hidden>
+        <header class="view__head">
+          <div>
+            <h2 class="view__title">Comparativa 2019 vs 2023</h2>
+            <p class="view__sub" id="compare-sub">—</p>
+          </div>
+        </header>
+
+        <section class="compare-section">
+          <h3 class="compare-section__title">Resumen</h3>
+          <div id="compare-summary" class="compare-summary"></div>
+        </section>
+
+        <section class="compare-section">
+          <h3 class="compare-section__title">Partidos</h3>
+          <p class="compare-section__sub">Solo partidos que existieron en ambos años. Ordenados por mayor cambio absoluto.</p>
+          <div id="compare-parties" class="compare-parties"></div>
+        </section>
+
+        <section class="compare-section">
+          <h3 class="compare-section__title">Puestos comparables</h3>
+          <p class="compare-section__sub">Puestos físicos presentes en ambos años. Marcado los que voltearon de partido.</p>
+          <div id="compare-stations" class="compare-stations"></div>
+        </section>
+
+        <section class="compare-section">
+          <h3 class="compare-section__title">Mapa</h3>
+          <p class="compare-section__sub">Coloreados por ganador 2023 · halo si voltearon respecto a 2019.</p>
+          <div id="compare-map" class="compare-map"></div>
+        </section>
+      </article>
     </section>
   </main>
 
@@ -415,9 +448,9 @@
   <!-- Toast container -->
   <div id="toast-host" class="toast-host" aria-live="polite"></div>
 
-  <script src="js/api.js?v=1778036887"></script>
-  <script src="js/ai.js?v=1778036887"></script>
-  <script src="js/charts.js?v=1778036887"></script>
-  <script src="js/app.js?v=1778036887"></script>
+  <script src="js/api.js?v=1778038889"></script>
+  <script src="js/ai.js?v=1778038889"></script>
+  <script src="js/charts.js?v=1778038889"></script>
+  <script src="js/app.js?v=1778038889"></script>
 </body>
 </html>

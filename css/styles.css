@@ -1656,3 +1656,235 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   background: #ccc;
   border: 1px solid #888;
 }
+
+/* ============================================================
+   Comparativa 2019 vs 2023
+   ============================================================ */
+.compare-section {
+  margin-top: var(--s-6);
+}
+.compare-section:first-of-type {
+  margin-top: var(--s-4);
+}
+.compare-section__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin: 0 0 4px;
+}
+.compare-section__sub {
+  color: var(--text-3);
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
+/* Resumen — 4 tarjetas con valor por año + delta */
+.compare-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-3);
+}
+.compare-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: 14px 16px;
+}
+.compare-card__label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.compare-card__years {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  align-items: baseline;
+}
+.compare-card__year {
+  display: flex;
+  flex-direction: column;
+}
+.compare-card__year-label {
+  font-size: 10px;
+  color: var(--text-4);
+  font-weight: 500;
+}
+.compare-card__year-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: 1.1;
+}
+.compare-card__delta {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Δ colors — verde sube, rojo baja */
+.delta--up    { color: #1f8a4a; }
+.delta--down  { color: #b3261e; }
+.delta--same  { color: var(--text-3); }
+
+/* Partidos — filas con bar dual y delta */
+.compare-parties {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.compare-party-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 1.5fr 3fr 110px;
+  gap: 16px;
+  align-items: center;
+}
+.compare-party-row__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-party-row__bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.compare-bar {
+  display: grid;
+  grid-template-columns: 36px 1fr 80px;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.compare-bar__year { font-weight: 500; }
+.compare-bar__track {
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.compare-bar__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s var(--ease);
+}
+.compare-bar__value {
+  font-weight: 500;
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.compare-party-row__delta {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Puestos comparables — grid de tarjetas con dos años apilados */
+.compare-stations {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--s-3);
+}
+.compare-station-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.compare-station-card--flipped {
+  border-color: #d49b1c;
+  box-shadow: 0 0 0 2px rgba(212, 155, 28, 0.18);
+}
+.compare-station-card__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+.compare-station-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0;
+  line-height: 1.25;
+}
+.compare-station-card__zone {
+  font-size: 11px;
+  color: var(--text-4);
+  margin-top: 2px;
+}
+.compare-station-card__flip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a5a00;
+  background: rgba(212, 155, 28, 0.18);
+  border-radius: 999px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.compare-station-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 56px;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.compare-station-row__year {
+  font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.compare-station-row__winner {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.compare-station-row__name {
+  font-weight: 500;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-station-row__party {
+  font-size: 10px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-station-row__pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mapa */
+.compare-map {
+  height: 480px;
+  border-radius: var(--r-2);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}

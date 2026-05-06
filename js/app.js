@@ -21,6 +21,14 @@ const state = {
   mapMode: 'votes',           // 'votes' | 'winner' (only used when no candidate selected)
   mapCandidate: '',           // candidate name, or '' for "ganador por puesto"
   loading: false,
+  // Cache de la pestaña Comparativa: { '2019': {benchmark, mapData}, '2023': {...}, forKey }
+  compareData: null,
+};
+
+// Leaflet handles para el mapa de Comparativa (separados del mapa principal).
+const compareMapState = {
+  map: null,
+  layer: null,
 };
 
 // Leaflet handles (lazy-initialized on first map render)
@@ -633,6 +641,7 @@ function renderAll() {
     case 'parties':    renderParties(); $('#view-parties').hidden = false; break;
     case 'stations':   renderStations(); $('#view-stations').hidden = false; break;
     case 'map':        $('#view-map').hidden = false; renderMap(); break;
+    case 'compare':    $('#view-compare').hidden = false; renderCompare(); break;
   }
 }
 
@@ -1872,6 +1881,309 @@ function closeStationModal() {
 }
 
 // ----------------------------------------------------------------
+// View 6 · Comparativa 2019 vs 2023
+// ----------------------------------------------------------------
+const COMPARE_YEARS = [
+  { id: 'territoriales-2019', year: 2019, label: '2019' },
+  { id: 'territoriales-2023', year: 2023, label: '2023' },
+];
+
+async function renderCompare() {
+  const corp = state.corporations.find(c => c.code === state.corporationCode);
+  $('#compare-sub').textContent = corp ? `Cargo: ${corp.name}` : '';
+
+  const key = state.corporationCode;
+  if (state.compareData?.forKey !== key) {
+    // Mostrar loading mientras se cargan ambos años en paralelo.
+    $('#compare-summary').innerHTML =
+      `<div class="loading"><div class="loading__bar"></div>
+       <span class="loading__text">Cargando datos de 2019 y 2023…</span></div>`;
+    $('#compare-parties').innerHTML = '';
+    $('#compare-stations').innerHTML = '';
+    try {
+      const fetched = await Promise.all(COMPARE_YEARS.flatMap(y => [
+        ElectoralAPI.getBenchmark(y.id, key),
+        ElectoralAPI.getMap(y.id, key),
+      ]));
+      state.compareData = {
+        forKey: key,
+        '2019': { benchmark: normalizeBenchmark(fetched[0]), mapData: normalizeMap(fetched[1]) },
+        '2023': { benchmark: normalizeBenchmark(fetched[2]), mapData: normalizeMap(fetched[3]) },
+      };
+    } catch (err) {
+      $('#compare-summary').innerHTML = emptyState(`No se pudieron cargar los datos: ${err.message}`);
+      return;
+    }
+  }
+
+  const d19 = state.compareData['2019'];
+  const d23 = state.compareData['2023'];
+
+  renderCompareSummary(d19, d23);
+  renderCompareParties(d19, d23);
+  renderCompareStations(d19, d23);
+  renderCompareMap(d19, d23);
+}
+
+/** Calculate Δ as { abs, pct, dir } between two numbers. dir: 'up' | 'down' | 'same'. */
+function computeDelta(prev, next) {
+  const abs = next - prev;
+  const pct = prev === 0 ? (next === 0 ? 0 : 100) : (abs / prev) * 100;
+  const dir = abs > 0 ? 'up' : abs < 0 ? 'down' : 'same';
+  return { abs, pct, dir };
+}
+
+function deltaHtml(delta, opts = {}) {
+  const arrow = delta.dir === 'up' ? '↑' : delta.dir === 'down' ? '↓' : '→';
+  const sign = delta.abs > 0 ? '+' : '';
+  const absText = opts.format === 'pct'
+    ? `${sign}${delta.abs.toFixed(1)} pp`
+    : `${sign}${fmt(delta.abs)}`;
+  const pctText = isFinite(delta.pct) ? ` (${sign}${delta.pct.toFixed(1)}%)` : '';
+  return `<span class="delta--${delta.dir}">${arrow} ${absText}${opts.hidePct ? '' : pctText}</span>`;
+}
+
+function renderCompareSummary(d19, d23) {
+  const stations19 = d19.mapData?.stations?.length || d19.benchmark.totalStations || 0;
+  const stations23 = d23.mapData?.stations?.length || d23.benchmark.totalStations || 0;
+
+  const cards = [
+    {
+      label: 'Votos válidos',
+      v19: d19.benchmark.totalVotes,
+      v23: d23.benchmark.totalVotes,
+    },
+    {
+      label: 'Candidatos',
+      v19: d19.benchmark.totalCandidates,
+      v23: d23.benchmark.totalCandidates,
+    },
+    {
+      label: 'Partidos',
+      v19: d19.benchmark.totalParties,
+      v23: d23.benchmark.totalParties,
+    },
+    {
+      label: 'Puestos',
+      v19: stations19,
+      v23: stations23,
+    },
+  ];
+
+  $('#compare-summary').innerHTML = cards.map(c => {
+    const d = computeDelta(c.v19, c.v23);
+    return `
+      <div class="compare-card">
+        <div class="compare-card__label">${escapeHtml(c.label)}</div>
+        <div class="compare-card__years">
+          <div class="compare-card__year">
+            <span class="compare-card__year-label">2019</span>
+            <span class="compare-card__year-value">${fmt(c.v19)}</span>
+          </div>
+          <div class="compare-card__year">
+            <span class="compare-card__year-label">2023</span>
+            <span class="compare-card__year-value">${fmt(c.v23)}</span>
+          </div>
+        </div>
+        <div class="compare-card__delta">${deltaHtml(d)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderCompareParties(d19, d23) {
+  const norm = s => String(s || '').trim().toUpperCase();
+  const map19 = new Map(d19.benchmark.parties.map(p => [norm(p.name), p]));
+  const map23 = new Map(d23.benchmark.parties.map(p => [norm(p.name), p]));
+
+  const sharedKeys = [...map19.keys()].filter(k => map23.has(k));
+  if (sharedKeys.length === 0) {
+    $('#compare-parties').innerHTML = emptyState('No hay partidos en común entre los dos años.');
+    return;
+  }
+
+  const rows = sharedKeys.map(k => {
+    const p19 = map19.get(k);
+    const p23 = map23.get(k);
+    return {
+      name: p23.name,
+      v19: p19.votes,
+      v23: p23.votes,
+      pct19: p19.pct || 0,
+      pct23: p23.pct || 0,
+      delta: computeDelta(p19.votes, p23.votes),
+      deltaPct: computeDelta(p19.pct || 0, p23.pct || 0),
+    };
+  });
+
+  // Sort by absolute change descending — quien más se movió primero.
+  rows.sort((a, b) => Math.abs(b.delta.abs) - Math.abs(a.delta.abs));
+
+  const maxVotes = Math.max(...rows.flatMap(r => [r.v19, r.v23]), 1);
+
+  $('#compare-parties').innerHTML = rows.map((r, i) => {
+    const w19 = (r.v19 / maxVotes) * 100;
+    const w23 = (r.v23 / maxVotes) * 100;
+    const color = ChartHelpers.color(i);
+    return `
+      <div class="compare-party-row">
+        <div class="compare-party-row__name" title="${escapeHtml(titleCase(r.name))}">${escapeHtml(titleCase(r.name))}</div>
+        <div class="compare-party-row__bars">
+          <div class="compare-bar">
+            <span class="compare-bar__year">2019</span>
+            <div class="compare-bar__track">
+              <div class="compare-bar__fill" style="width:${w19}%; background:${color}; opacity:0.55"></div>
+            </div>
+            <span class="compare-bar__value">${fmt(r.v19)} · ${fmtPct(r.pct19)}</span>
+          </div>
+          <div class="compare-bar">
+            <span class="compare-bar__year">2023</span>
+            <div class="compare-bar__track">
+              <div class="compare-bar__fill" style="width:${w23}%; background:${color}"></div>
+            </div>
+            <span class="compare-bar__value">${fmt(r.v23)} · ${fmtPct(r.pct23)}</span>
+          </div>
+        </div>
+        <div class="compare-party-row__delta delta--${r.delta.dir}">
+          ${r.delta.dir === 'up' ? '↑' : r.delta.dir === 'down' ? '↓' : '→'}
+          ${r.deltaPct.abs > 0 ? '+' : ''}${r.deltaPct.abs.toFixed(1)} pp
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderCompareStations(d19, d23) {
+  const stations19 = d19.mapData?.stations || [];
+  const stations23 = d23.mapData?.stations || [];
+  const map23 = new Map(stations23.map(s => [s.code, s]));
+
+  // Sólo los que existen en ambos.
+  const pairs = stations19
+    .filter(s => map23.has(s.code))
+    .map(s19 => ({ code: s19.code, s19, s23: map23.get(s19.code) }));
+
+  if (pairs.length === 0) {
+    $('#compare-stations').innerHTML = emptyState('No hay puestos comparables entre 2019 y 2023 para este cargo.');
+    return;
+  }
+
+  // Sort: flipped first, then alphabetically.
+  pairs.sort((a, b) => {
+    const fa = a.s19.topCandidate.party !== a.s23.topCandidate.party ? 0 : 1;
+    const fb = b.s19.topCandidate.party !== b.s23.topCandidate.party ? 0 : 1;
+    if (fa !== fb) return fa - fb;
+    return a.s23.name.localeCompare(b.s23.name, 'es');
+  });
+
+  $('#compare-stations').innerHTML = pairs.map(({ s19, s23 }) => {
+    const flipped = (s19.topCandidate.party || '') !== (s23.topCandidate.party || '');
+    return `
+      <article class="compare-station-card${flipped ? ' compare-station-card--flipped' : ''}">
+        <header class="compare-station-card__head">
+          <div>
+            <h4 class="compare-station-card__name">${escapeHtml(titleCase(s23.name))}</h4>
+            ${s23.zone ? `<div class="compare-station-card__zone">${escapeHtml(titleCase(s23.zone))}</div>` : ''}
+          </div>
+          ${flipped ? '<span class="compare-station-card__flip">Volteó</span>' : ''}
+        </header>
+        ${compareStationRow('2019', s19)}
+        ${compareStationRow('2023', s23)}
+      </article>
+    `;
+  }).join('');
+}
+
+function compareStationRow(year, station) {
+  const w = station.topCandidate || {};
+  const name = w.name && w.name !== '—' ? titleCase(w.name) : '—';
+  const party = w.party && w.party !== '—' ? titleCase(w.party) : '';
+  return `
+    <div class="compare-station-row">
+      <span class="compare-station-row__year">${year}</span>
+      <div class="compare-station-row__winner">
+        <span class="compare-station-row__name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        ${party ? `<span class="compare-station-row__party" title="${escapeHtml(party)}">${escapeHtml(party)}</span>` : ''}
+      </div>
+      <span class="compare-station-row__pct">${fmtPct(w.pct)}</span>
+    </div>
+  `;
+}
+
+function renderCompareMap(d19, d23) {
+  const stations19 = d19.mapData?.stations || [];
+  const stations23 = d23.mapData?.stations || [];
+  const map19 = new Map(stations19.map(s => [s.code, s]));
+
+  // Compartidos con coordenadas válidas.
+  const pairs = stations23
+    .filter(s => map19.has(s.code))
+    .map(s23 => ({ s23, s19: map19.get(s23.code) }))
+    .filter(p => Number.isFinite(p.s23.lat) && Number.isFinite(p.s23.lng));
+
+  // Inicializar Leaflet en el contenedor compare-map (sólo una vez).
+  if (!compareMapState.map) {
+    compareMapState.map = L.map('compare-map', {
+      center: RIONEGRO_DEFAULT_CENTER,
+      zoom: 13,
+      scrollWheelZoom: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 18,
+    }).addTo(compareMapState.map);
+    compareMapState.layer = L.layerGroup().addTo(compareMapState.map);
+  }
+  compareMapState.layer.clearLayers();
+
+  if (pairs.length === 0) {
+    return;
+  }
+
+  // Asignar color por partido ganador 2023 (consistente con el mapa principal).
+  const palette = new Map();
+  let pi = 0;
+  const colorOf = (party) => {
+    const k = String(party || '').toUpperCase();
+    if (!palette.has(k)) palette.set(k, ChartHelpers.color(pi++));
+    return palette.get(k);
+  };
+
+  for (const { s23, s19 } of pairs) {
+    const winnerParty23 = s23.topCandidate.party || '';
+    const winnerParty19 = s19.topCandidate.party || '';
+    const flipped = winnerParty23 !== winnerParty19;
+    const color = colorOf(winnerParty23);
+
+    // Halo más grueso si volteó.
+    const ring = flipped
+      ? `box-shadow: 0 0 0 4px rgba(212, 155, 28, 0.65), 0 1px 4px rgba(0, 0, 0, 0.3);`
+      : `box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);`;
+    const html = `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid white;${ring}"></div>`;
+    const icon = L.divIcon({ html, className: 'compare-marker', iconSize: [14, 14], iconAnchor: [7, 7] });
+
+    const marker = L.marker([s23.lat, s23.lng], { icon });
+    const tooltip = `
+      <strong>${escapeHtml(titleCase(s23.name))}</strong><br>
+      2019: ${escapeHtml(titleCase(s19.topCandidate.name || '—'))} · ${escapeHtml(titleCase(winnerParty19 || '—'))}<br>
+      2023: ${escapeHtml(titleCase(s23.topCandidate.name || '—'))} · ${escapeHtml(titleCase(winnerParty23 || '—'))}
+      ${flipped ? '<br><b style="color:#8a5a00">Volteó</b>' : ''}
+    `;
+    marker.bindTooltip(tooltip, { sticky: true });
+    marker.addTo(compareMapState.layer);
+  }
+
+  // Fit al conjunto.
+  const latlngs = pairs.map(p => [p.s23.lat, p.s23.lng]);
+  if (latlngs.length > 1) {
+    const bounds = L.latLngBounds(latlngs);
+    compareMapState.map.fitBounds(bounds.pad(0.1));
+  }
+  // Forzar refresco en caso de que se monte mientras estaba oculto.
+  setTimeout(() => compareMapState.map.invalidateSize(), 50);
+}
+
+// ----------------------------------------------------------------
 // AI Modal (chat)
 // ----------------------------------------------------------------
 const aiState = {
@@ -2112,6 +2424,7 @@ function wireEvents() {
   });
   $('#corporation-select').addEventListener('change', async (e) => {
     state.corporationCode = e.target.value;
+    state.compareData = null; // invalidar cache de Comparativa al cambiar cargo
     await loadElectionData();
   });
 
@@ -2125,6 +2438,9 @@ function wireEvents() {
         t.classList.toggle('tab--active', active);
         t.setAttribute('aria-selected', active ? 'true' : 'false');
       });
+      // El selector "Elección" no aplica en Comparativa (ahí siempre se muestran ambos años).
+      const wrap = $('#election-select-wrap');
+      if (wrap) wrap.hidden = (v === 'compare');
       renderAll();
     });
   });
