@@ -1991,20 +1991,30 @@ function renderCompareSummary(d19, d23) {
   }).join('');
 }
 
-function renderCompareParties(d19, d23) {
-  const norm = s => String(s || '').trim().toUpperCase();
-  const map19 = new Map(d19.benchmark.parties.map(p => [norm(p.name), p]));
-  const map23 = new Map(d23.benchmark.parties.map(p => [norm(p.name), p]));
+// Códigos de partido que la Registraduría reasignó entre años a movimientos
+// distintos. Excluirlos de la comparativa para no mostrar swaps falsos.
+const PARTY_CODE_REASSIGNED = new Set([
+  '00017', // 2019: PARTIDO DE REIVINDICACION ETNICA "PRE" → 2023: DIGNIDAD & COMPROMISO
+]);
 
-  const sharedKeys = [...map19.keys()].filter(k => map23.has(k));
-  if (sharedKeys.length === 0) {
-    $('#compare-parties').innerHTML = emptyState('No hay partidos en común entre los dos años.');
+function renderCompareParties(d19, d23) {
+  const map19 = new Map(d19.benchmark.parties.filter(p => p.partyCode).map(p => [p.partyCode, p]));
+  const map23 = new Map(d23.benchmark.parties.filter(p => p.partyCode).map(p => [p.partyCode, p]));
+
+  const sharedCodes = [...map19.keys()]
+    .filter(c => map23.has(c) && !PARTY_CODE_REASSIGNED.has(c));
+
+  if (sharedCodes.length === 0) {
+    $('#compare-parties').innerHTML = emptyState(
+      'No hay partidos en común entre los dos años para este cargo. ' +
+      'En cargos como Alcaldía cada candidatura usa códigos distintos cada elección.'
+    );
     return;
   }
 
-  const rows = sharedKeys.map(k => {
-    const p19 = map19.get(k);
-    const p23 = map23.get(k);
+  const rows = sharedCodes.map(code => {
+    const p19 = map19.get(code);
+    const p23 = map23.get(code);
     return {
       name: p23.name,
       v19: p19.votes,
