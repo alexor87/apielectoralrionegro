@@ -2247,10 +2247,13 @@ function compareStationRow(year, station) {
   const w = station.topCandidate || {};
   const name = w.name && w.name !== '—' ? titleCase(w.name) : '—';
   const party = w.party && w.party !== '—' ? titleCase(w.party) : '';
+  const votes = Number(w.votes) || 0;
   return `
     <div class="compare-station-row">
       <span class="compare-station-row__year">${year}</span>
-      <span class="compare-station-row__pct">${fmtPct(w.pct)}</span>
+      <span class="compare-station-row__pct">
+        ${fmt(votes)}<span class="compare-station-row__pct-unit">votos</span>
+      </span>
       <div class="compare-station-row__name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
       ${party ? `<div class="compare-station-row__party">${escapeHtml(party)}</div>` : ''}
     </div>

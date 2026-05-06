@@ -1880,6 +1880,18 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   font-variant-numeric: tabular-nums;
   align-self: center;
   line-height: 1;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.compare-station-row__pct-unit {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .compare-station-row__name {
   grid-area: name;
