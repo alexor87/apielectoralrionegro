@@ -1888,3 +1888,94 @@ a:hover { color: var(--brand-hover); text-decoration: underline; text-decoration
   overflow: hidden;
   border: 1px solid var(--border);
 }
+
+/* Candidatos en ambos años — tabla */
+.compare-candidates {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+.compare-candidates__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.compare-candidates__table thead th {
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.compare-candidates__table thead th.num {
+  text-align: right;
+}
+.compare-candidates__table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.compare-candidates__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.compare-candidates__table tbody tr:hover {
+  background: var(--surface-2);
+}
+.compare-candidates__name {
+  font-weight: 500;
+  color: var(--text-1);
+}
+.compare-candidates__parties {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.compare-candidates__party-19,
+.compare-candidates__party-23 {
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-candidates__party-arrow { color: var(--text-4); }
+.compare-candidates__switched {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a5a00;
+  background: rgba(212, 155, 28, 0.18);
+  border-radius: 999px;
+  padding: 2px 7px;
+  margin-left: 6px;
+}
+.compare-candidates__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.compare-candidates__pct {
+  font-size: 11px;
+  color: var(--text-4);
+}
+.compare-candidates__delta {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}

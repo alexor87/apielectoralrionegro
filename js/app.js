@@ -1921,8 +1921,19 @@ async function renderCompare() {
 
   renderCompareSummary(d19, d23);
   renderCompareParties(d19, d23);
+  renderCompareCandidates(d19, d23);
   renderCompareStations(d19, d23);
   renderCompareMap(d19, d23);
+}
+
+/** Normalize a person name for cross-year matching: strip accents, uppercase, collapse spaces. */
+function normalizePersonName(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** Calculate Δ as { abs, pct, dir } between two numbers. dir: 'up' | 'down' | 'same'. */
@@ -2061,6 +2072,93 @@ function renderCompareParties(d19, d23) {
       </div>
     `;
   }).join('');
+}
+
+function renderCompareCandidates(d19, d23) {
+  // Excluir los "voto por la lista" (candidate_code termina en _00000) — esos
+  // son votos al partido, no a una persona.
+  const isListEntry = c => String(c.code || '').endsWith('_00000');
+
+  const cands19 = d19.benchmark.candidates.filter(c => !isListEntry(c));
+  const cands23 = d23.benchmark.candidates.filter(c => !isListEntry(c));
+
+  const map19 = new Map();
+  for (const c of cands19) {
+    const key = normalizePersonName(c.name);
+    if (key) map19.set(key, c);
+  }
+
+  const rows = [];
+  for (const c23 of cands23) {
+    const key = normalizePersonName(c23.name);
+    const c19 = map19.get(key);
+    if (!c19) continue;
+    rows.push({
+      name: titleCase(c23.name),
+      party19: c19.party,
+      party23: c23.party,
+      switched: (c19.partyCode || '') !== (c23.partyCode || ''),
+      votes19: c19.votes,
+      votes23: c23.votes,
+      pct19: c19.pct || 0,
+      pct23: c23.pct || 0,
+      delta: computeDelta(c19.votes, c23.votes),
+    });
+  }
+
+  if (rows.length === 0) {
+    $('#compare-candidates').innerHTML = emptyState(
+      'Ningún candidato se presentó en ambos años para este cargo.'
+    );
+    return;
+  }
+
+  rows.sort((a, b) => b.votes23 - a.votes23);
+
+  const sameParty = (a, b) => a === b;
+  const tbody = rows.map(r => {
+    const partiesHtml = sameParty(r.party19, r.party23)
+      ? `<span class="compare-candidates__party-23">${escapeHtml(titleCase(r.party23 || '—'))}</span>`
+      : `<span class="compare-candidates__party-19" title="2019">${escapeHtml(titleCase(r.party19 || '—'))}</span>
+         <span class="compare-candidates__party-arrow">→</span>
+         <span class="compare-candidates__party-23" title="2023">${escapeHtml(titleCase(r.party23 || '—'))}</span>
+         <span class="compare-candidates__switched">Cambió</span>`;
+
+    return `
+      <tr>
+        <td>
+          <div class="compare-candidates__name">${escapeHtml(r.name)}</div>
+          <div class="compare-candidates__parties">${partiesHtml}</div>
+        </td>
+        <td class="compare-candidates__num">
+          ${fmt(r.votes19)}
+          <div class="compare-candidates__pct">${fmtPct(r.pct19)}</div>
+        </td>
+        <td class="compare-candidates__num">
+          ${fmt(r.votes23)}
+          <div class="compare-candidates__pct">${fmtPct(r.pct23)}</div>
+        </td>
+        <td class="compare-candidates__delta delta--${r.delta.dir}">
+          ${r.delta.dir === 'up' ? '↑' : r.delta.dir === 'down' ? '↓' : '→'}
+          ${r.delta.abs > 0 ? '+' : ''}${fmt(r.delta.abs)}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  $('#compare-candidates').innerHTML = `
+    <table class="compare-candidates__table">
+      <thead>
+        <tr>
+          <th>Candidato (${rows.length})</th>
+          <th class="num">2019</th>
+          <th class="num">2023</th>
+          <th class="num">Δ</th>
+        </tr>
+      </thead>
+      <tbody>${tbody}</tbody>
+    </table>
+  `;
 }
 
 function renderCompareStations(d19, d23) {
