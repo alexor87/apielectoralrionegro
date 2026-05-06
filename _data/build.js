@@ -31,8 +31,13 @@ const ELECTION = {
 const MUNICIPALITY_CODE = '214'; // Rionegro
 const MUNICIPALITY_NAME = 'RIONEGRO';
 
-// Candidate codes that represent invalid/blank votes, not real candidates.
-const INVALID_CANDIDATE_CODES = new Set(['00996', '00997', '00998']);
+// Composite candidate keys that represent invalid/blank votes, not real
+// candidates. They live under the synthetic party "00000 CANDIDATOS TOTALES".
+const INVALID_CANDIDATE_CODES = new Set([
+  '00000_00996', // VOTOS EN BLANCO
+  '00000_00997', // VOTOS NULOS
+  '00000_00998', // VOTOS NO MARCADOS
+]);
 
 // ----------------------------------------------------------------
 // CSV parsing (handles quoted fields with possible embedded commas)
@@ -172,10 +177,14 @@ async function processCsv() {
     corp.total_votes += votes;
 
     // Per-candidate aggregation at all levels.
-    const candKey = candCode;
+    // Composite key: in Concejo/Asamblea/JAL each party numbers its candidates
+    // 1..N, so plain candCode collides across parties. The composite uniquely
+    // identifies a candidate and is also exposed as `candidate_code` in the
+    // output JSON so app.js can match top-N entries against per-mesa rows.
+    const candKey = `${partyCode}_${candCode}`;
     if (!mesaObj.candidates.has(candKey)) {
       mesaObj.candidates.set(candKey, {
-        candidate_code: candCode,
+        candidate_code: candKey,
         candidate_name: candName,
         party_code: partyCode,
         votes: 0,
@@ -185,7 +194,7 @@ async function processCsv() {
 
     if (!corp.candidates.has(candKey)) {
       corp.candidates.set(candKey, {
-        candidate_code: candCode,
+        candidate_code: candKey,
         candidate_name: candName,
         party_code: partyCode,
         party_name: partyName,
@@ -195,7 +204,7 @@ async function processCsv() {
     corp.candidates.get(candKey).votes += votes;
 
     // Party totals — skip the "CANDIDATOS TOTALES" rollup row that holds invalid votes.
-    if (!INVALID_CANDIDATE_CODES.has(candCode)) {
+    if (!INVALID_CANDIDATE_CODES.has(candKey)) {
       if (!corp.parties.has(partyCode)) {
         corp.parties.set(partyCode, {
           party_code: partyCode,
